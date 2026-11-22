@@ -74,7 +74,7 @@ android {
     defaultConfig {
         applicationId = "io.github.ccch1mneyyy.dsh_app"
         if (sideBuild) applicationIdSuffix = sideSuffix
-        manifestPlaceholders["appLabel"] = if (sideBuild) "DSH Go 测试" else "DSH Go"
+        manifestPlaceholders["appLabel"] = if (sideBuild) "Harness Pocket 测试" else "Harness Pocket"
         // java.nio.file (symlinks while unpacking the rootfs) needs API 26.
         minSdk = 26
         // Target 28 like Termux, so the API 29+ exec restriction on app-private
