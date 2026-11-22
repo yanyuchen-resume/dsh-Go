@@ -8,6 +8,9 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction
 import android.view.accessibility.AccessibilityWindowInfo
 
+/** Package metadata from the same enumeration, independent of the formatted tree subset. */
+internal data class CapturedImageWindow(val id: Int, val type: Int, val packageName: String?)
+
 /**
  * One read of the windows on the main display: plain [UiWindow]s for ScreenFormat plus
  * the native nodes they index ([UiNode.ref]), which the Actuator acts on. Drop with
@@ -27,24 +30,33 @@ internal class Capture(
     val ownAppInFront: Boolean,
     /** A system window (notification shade, quick settings) covers the screen. */
     val systemInFront: Boolean,
-    /** Hit the node or time cap: the tree may be incomplete. */
+    /** Hit a window, node, depth or time limit: the tree may be incomplete. */
     val truncated: Boolean,
-    /** A readable dialog is in front, but a lower application window did not supply a root. */
+    /** A declared tree part could not be read; the available content is retained. */
     val partial: Boolean = false,
     /**
      * Title of a front window whose root the system won't give us. This can happen with
-     * accessibilityDataSensitive pages or a transition; the missing root is not proof of FLAG_SECURE.
+     * accessibilityDataSensitive pages or a transition; conservatively forwarded as secure.
      */
     val hiddenWindowTitle: String? = null,
     /**
      * Title of the front window that is there but gives us only empty layout shells.
-     * Filtering and an unfinished page can both look like this. Record the observation gap,
-     * not a guessed system protection; screenshot availability is measured independently.
+     * Android 14+ hides views marked accessibilityDataSensitive from non-tool
+     * services this way (GitHub, banking and password pages), so the root survives while the
+     * content subtree does not. Only a hint: report 「可能受敏感视图策略限制」, never assert
+     * that the app is a sensitive page (a fresh, still-drawing app looks the same for a moment).
      */
     val unreadableWindowTitle: String? = null,
     val takenAt: Long = SystemClock.uptimeMillis(),
-    /** Event generation sampled before traversal; an event during capture prevents reuse. */
-    val eventCount: Long = -1,
+    /** Whole enumeration, before the formatting loop can stop at an opaque window. */
+    val visualWindowId: Int? = null,
+    val visualComplete: Boolean = false,
+    val visualOcclusions: List<Box> = emptyList(),
+    val imageWindows: List<CapturedImageWindow> = emptyList(),
+    /** Same read counter; consumers must still compare current transitions after their own work. */
+    val typedTransitions: Long? = null,
+    /** Delivered events for the same read; independent of the window-transition counter. */
+    val typedEvents: Long? = null,
 ) {
     fun native(ref: Int): AccessibilityNodeInfo? = natives.getOrNull(ref)
 
@@ -72,74 +84,106 @@ internal object TreeCapture {
         )
     }
 
-    private class State(val deadline: Long) {
+    private class State(val deadline: Long, val typedTransitions: Long?, val typedEvents: Long?) {
         val natives = ArrayList<AccessibilityNodeInfo>(256)
         var count = 0
+        var typedFresh = true
         var truncated = false
+        var partial = false
+        var visualComplete = true
         val rect = Rect()
     }
 
-    fun capture(service: AccessibilityService, screen: Box, ownPackage: String, budgetMs: Long, eventCount: Long = -1): Capture {
-        val st = State(SystemClock.uptimeMillis() + budgetMs)
+    fun capture(service: AccessibilityService, screen: Box, ownPackage: String, budgetMs: Long, typedTransitions: Long? = null, typedEvents: Long? = null): Capture {
+        val st = State(SystemClock.uptimeMillis() + budgetMs, typedTransitions, typedEvents)
         val all = try { service.windows } catch (_: Throwable) { null }
         val sorted = all.orEmpty().sortedByDescending { it.layer }
         // Scan every window before the content loop can stop at an opaque app window.
         val keyboard = WindowContent.keyboardShown(all?.map { it.type }, AccessibilityWindowInfo.TYPE_INPUT_METHOD)
-        // A docked IME can cover editors even when their accessibility bounds stay unchanged.
-        val keyboardTop = all.orEmpty().filter { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
-            .mapNotNull { window ->
-                val rect = Rect()
-                runCatching { window.getBoundsInScreen(rect) }.getOrNull() ?: return@mapNotNull null
-                val box = Box(rect.left, rect.top, rect.right, rect.bottom).intersect(screen)
-                box.top.takeIf { !box.isEmpty && box.bottom >= screen.bottom && box.width >= screen.width * 4 / 5 }
-            }.minOrNull()
-        val contentViewport = keyboardTop?.let { Box(screen.left, screen.top, screen.right, it) } ?: screen
+        // Conservative whole-window facts. Only our own confirmed overlay is ignored; small
+        // system chrome is retained as an occluder, never silently treated as target-free space.
+        val visual = runCatching {
+            all ?: error("No window enumeration")
+            val apps = mutableListOf<Int>()
+            val occlusions = mutableListOf<Box>()
+            var complete = true
+            for (w in all) {
+                w.getBoundsInScreen(st.rect)
+                val box = Box(st.rect.left, st.rect.top, st.rect.right, st.rect.bottom).intersect(screen)
+                if (box.isEmpty) continue
+                when (w.type) {
+                    AccessibilityWindowInfo.TYPE_APPLICATION -> apps += w.id
+                    AccessibilityWindowInfo.TYPE_SYSTEM -> {
+                        if (box.area.toDouble() / screen.area.coerceAtLeast(1) >= 0.5) complete = false
+                        occlusions += box
+                    }
+                    AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY -> {
+                        val root = w.root
+                        try { refreshTyped(root, st); if (root?.packageName?.toString() != ownPackage) complete = false }
+                        finally { root?.let(::release) }
+                    }
+                    else -> complete = false // IME, divider, magnifier or unknown overlay.
+                }
+            }
+            Triple(apps.singleOrNull(), complete && apps.size == 1, occlusions.toList())
+        }.getOrNull()
+        val imageWindows = mutableListOf<CapturedImageWindow>()
         val chosen = mutableListOf<UiWindow>()
         var topPackage: String? = null
         var ownFront = false
         var systemFront = false
         var hidden: String? = null
         var unreadable: String? = null
-        var partial = false
         val screenArea = screen.area.coerceAtLeast(1)
         try {
+            // Do not let the content loop's MAX_WINDOWS/opaque-front exits erase
+            // known display-image sources. Only package metadata is read here.
+            for (w in all.orEmpty()) {
+                w.getBoundsInScreen(st.rect)
+                val bounds = Box(st.rect.left, st.rect.top, st.rect.right, st.rect.bottom)
+                if (bounds.intersect(screen).isEmpty) continue
+                var pkg: String? = null
+                if (!Thread.currentThread().isInterrupted && SystemClock.uptimeMillis() < st.deadline) {
+                    try {
+                        // API 33 permits no prefetch. Older getRoot may prefetch
+                        // internally; this code never inspects child/text data.
+                        val root = if (Build.VERSION.SDK_INT >= 33) w.getRoot(0) else w.root
+                        try { refreshTyped(root, st); pkg = root?.packageName?.toString()?.takeIf { it.isNotBlank() } }
+                        finally { root?.let(::release) }
+                    } catch (_: Exception) {
+                        // A failed root lookup establishes no package identity.
+                    }
+                }
+                imageWindows += CapturedImageWindow(w.id, w.type, pkg)
+            }
             for (w in sorted) {
                 when (w.type) {
                     AccessibilityWindowInfo.TYPE_INPUT_METHOD -> continue
                     AccessibilityWindowInfo.TYPE_APPLICATION, AccessibilityWindowInfo.TYPE_SYSTEM -> {}
                     else -> continue // our overlay, other services' overlays, split-screen divider, magnifier
                 }
-                if (chosen.size >= MAX_WINDOWS) break
                 w.getBoundsInScreen(st.rect)
                 val bounds = Box(st.rect.left, st.rect.top, st.rect.right, st.rect.bottom)
                 val share = bounds.intersect(screen).area.toDouble() / screenArea
                 if (share <= 0) continue
                 // Status bar, navigation bar, a floating ball: small system windows are chrome, not content.
                 if (w.type == AccessibilityWindowInfo.TYPE_SYSTEM && share < 0.5) continue
+                if (chosen.size >= MAX_WINDOWS) { st.truncated = true; break }
                 // Some windows answer getRoot() with null (seen on the API 35 emulator for a Settings
                 // sub-page); the active window's root is still reachable through the service.
                 val root = w.root ?: (if (w.isActive || w.isFocused) activeRoot(service, w.id) else null)
                 if (root == null) {
-                    if (chosen.isEmpty()) {
-                        val pkg = (service as? PhoneA11yService)?.foregroundIdentity?.packageFor(w.id, w.isActive || w.isFocused, SystemClock.uptimeMillis())
-                        topPackage = pkg
-                        ownFront = pkg == ownPackage
-                        systemFront = w.type == AccessibilityWindowInfo.TYPE_SYSTEM
-                        val title = if (Build.VERSION.SDK_INT >= 24) w.title?.toString() else null
-                        chosen += UiWindow(w.id, if (systemFront) WindowKind.SYSTEM else WindowKind.APP, pkg, title, bounds, null)
-                        hidden = title ?: ""
-                        break
-                    }
                     // A dialog, split-screen pane or IME-resized app can be unreadable too.
                     if (w.type == AccessibilityWindowInfo.TYPE_APPLICATION) {
                         when (WindowContent.rootGap(chosen)) {
                             WindowContent.RootGap.FRONT -> hidden = (if (Build.VERSION.SDK_INT >= 24) w.title?.toString() else null) ?: ""
-                            WindowContent.RootGap.PARTIAL -> partial = true
+                            WindowContent.RootGap.PARTIAL -> st.partial = true
                         }
                         break
                     }
                     continue
                 }
+                refreshTyped(root, st)
                 val pkg = root.packageName?.toString()
                 if (chosen.isEmpty()) {
                     topPackage = pkg
@@ -147,7 +191,7 @@ internal object TreeCapture {
                     systemFront = w.type == AccessibilityWindowInfo.TYPE_SYSTEM
                 }
                 val title = if (Build.VERSION.SDK_INT >= 24) w.title?.toString() else null
-                val node = convert(root, 0, st)
+                val node = convert(root, 0, st, refresh = false)
                 // Inspect the whole subtree, not just the root's child count. A chain of empty
                 // layouts is still unreadable; an unlabelled canvas is not evidence of filtering.
                 val emptyFront = chosen.isEmpty() && w.type == AccessibilityWindowInfo.TYPE_APPLICATION &&
@@ -164,7 +208,7 @@ internal object TreeCapture {
             if (Build.VERSION.SDK_INT < 33) all.orEmpty().forEach { runCatching { it.recycle() } }
         }
         return Capture(
-            windows = VisibleTree.windows(chosen, contentViewport),
+            windows = chosen,
             natives = st.natives,
             keyboardShown = keyboard,
             screen = screen,
@@ -172,10 +216,16 @@ internal object TreeCapture {
             ownAppInFront = ownFront,
             systemInFront = systemFront,
             truncated = st.truncated,
-            partial = partial,
+            partial = st.partial,
             hiddenWindowTitle = hidden,
             unreadableWindowTitle = unreadable,
-            eventCount = eventCount,
+            visualWindowId = visual?.first,
+            visualComplete = visual?.second == true && st.visualComplete && !st.truncated && !st.partial &&
+                hidden == null && unreadable == null && chosen.size == 1 && chosen.single().id == visual?.first,
+            visualOcclusions = visual?.third.orEmpty(),
+            imageWindows = imageWindows.toList(),
+            typedTransitions = st.typedTransitions.takeIf { st.typedFresh },
+            typedEvents = st.typedEvents.takeIf { st.typedFresh },
         )
     }
 
@@ -189,8 +239,7 @@ internal object TreeCapture {
                 w.getBoundsInScreen(rect)
                 val share = Box(rect.left, rect.top, rect.right, rect.bottom).intersect(screen).area.toDouble() / screen.area.coerceAtLeast(1)
                 if (w.type == AccessibilityWindowInfo.TYPE_SYSTEM && share < 0.5) continue
-                val root = w.root ?: (if (w.isActive || w.isFocused) activeRoot(service, w.id) else null)
-                    ?: return (service as? PhoneA11yService)?.foregroundIdentity?.packageFor(w.id, w.isActive || w.isFocused, SystemClock.uptimeMillis())
+                val root = w.root ?: (if (w.isActive || w.isFocused) activeRoot(service, w.id) else null) ?: continue
                 try { return root.packageName?.toString() } finally { release(root) }
             }
         } finally {
@@ -210,7 +259,19 @@ internal object TreeCapture {
     @Suppress("DEPRECATION")
     private fun release(node: AccessibilityNodeInfo) { if (Build.VERSION.SDK_INT < 33) runCatching { node.recycle() } }
 
-    private fun convert(node: AccessibilityNodeInfo, depth: Int, st: State): UiNode? {
+    private fun refreshTyped(node: AccessibilityNodeInfo?, st: State) {
+        if (st.typedTransitions == null) return
+        if (node == null || Thread.currentThread().isInterrupted || SystemClock.uptimeMillis() > st.deadline) {
+            st.typedFresh = false
+            return
+        }
+        val refreshed = try { node.refresh() } catch (_: Exception) { false }
+        if (!refreshed || Thread.currentThread().isInterrupted || SystemClock.uptimeMillis() > st.deadline)
+            st.typedFresh = false
+    }
+
+    private fun convert(node: AccessibilityNodeInfo, depth: Int, st: State, refresh: Boolean = true): UiNode? {
+        if (refresh) refreshTyped(node, st)
         if (!node.isVisibleToUser) { release(node); return null }
         node.getBoundsInScreen(st.rect)
         val bounds = Box(st.rect.left, st.rect.top, st.rect.right, st.rect.bottom)
@@ -218,14 +279,20 @@ internal object TreeCapture {
         st.natives += node
         st.count++
 
-        val children = ArrayList<UiNode>(node.childCount)
+        val rawChildren = node.childCount
+        val children = ArrayList<UiNode>(rawChildren)
         if (depth < MAX_DEPTH) {
-            for (i in 0 until node.childCount) {
+            for (i in 0 until rawChildren) {
                 if (st.count >= MAX_NODES || SystemClock.uptimeMillis() > st.deadline) { st.truncated = true; break }
-                val child = try { node.getChild(i) } catch (_: Throwable) { null } ?: continue
+                val child = try { node.getChild(i) } catch (_: Throwable) { null }
+                if (child == null) {
+                    st.visualComplete = false
+                    st.partial = true
+                    continue
+                }
                 convert(child, depth + 1, st)?.let(children::add)
             }
-        } else if (node.childCount > 0) st.truncated = true
+        } else if (rawChildren > 0) st.truncated = true
 
         var scroll = 0
         if (node.isScrollable) for (action in node.actionList) scrollIds[action.id]?.let { scroll = scroll or it }
@@ -259,6 +326,8 @@ internal object TreeCapture {
             rangeCurrent = range?.current,
             rangeMax = range?.max,
             children = children,
+            rawChildCount = rawChildren,
+            actionClick = node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_CLICK },
         )
     }
 }
