@@ -1,4 +1,6 @@
 {
+  "phoneVisualGrantsTitle": "截图操作权限",
+  "phoneVisualGrantRevoke": "点击撤销此应用的截图点按与输入权限",
   "phoneDiagnosticsCollecting": "正在收集…",
   "phoneDiagnosticsPacking": "正在打包…",
   "phoneDiagnosticsSharing": "正在打开分享…",
@@ -69,6 +71,9 @@
   "phoneToolScroll": "滑动",
   "phoneToolKey": "按键",
   "phoneToolTapCoordinates": "点坐标",
+  "phoneToolGesture": "手势",
+  "phoneToolInput": "按坐标输入",
+  "phoneToolRun": "多步任务",
   "phoneToolHandoff": "交还给你",
   "phoneToolOpenApp": "打开 App",
   "phoneToolListApps": "查看应用",
