@@ -2,6 +2,10 @@
   <a href="README.md">简体中文</a> · <b>English</b>
 </p>
 
+> **1.0.19 candidate: unified phone execution in chat.** Ordinary chats can use `schema:2 run` for local steps, `if` and bounded `repeat`. `yield`, a completed visual action or a need for judgment returns progress and available screenshots to the original conversation, without creating a checkpoint chat for the sequence. A send can share one approval across segments after the app, recipient and full message are displayed and confirmed; a changed scope or a finished phone task requires approval again. Per-app visual permission can be revoked in the app list; ordinary phone-control authorization still applies independently. The saved automation task page remains available. See the [phone-control guide](docs/guide/en/04-phone-control.md) and [candidate changelog](docs/changelog.md). Manual device acceptance has not been performed; consult the delivery record for build and validation status.
+
+Download community builds only from this repository's Releases; the original author's website below distributes upstream builds. The updater in 1.0.16–1.0.18 still points upstream: download and install updates manually without uninstalling. Future versions are built and published by [Android Release](.github/workflows/release.yml) after main's CI passes. Maintainers update `app/pubspec.yaml` and the bilingual changelog; see the [release process](docs/release.md#github-自动发版) for signing and workflow details.
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/assets/hero-en-dark.webp">
@@ -13,8 +17,22 @@
   A mobile client for DeepSeek Harness. Android is released; iOS is in development and device testing, and currently needs a Mac build signed with your own team (<a href="app/ios/README.md">iOS project</a> · <a href="docs/architecture.md">architecture</a>).
 </p>
 
+> **This repository is a community fork, based on upstream `v1.0.13`.** It adds `gesture` for
+> coordinate gestures, `input` for coordinate input, and `run` for bounded multi-step routines,
+> plus text targeting, waiting, and scrolling until a target appears. Version 1.0.16 resolves
+> targets on fresh observations, checks the foreground app, and returns progress on failure.
+> See [Phone routines](examples/phone-routines/README.md) for a task skill, 30 scenarios, and a local test page.
+> Upstream does not accept outside PRs, so this
+> fork is maintained separately; see [Coordinate gestures](#gesture) and
+> [docs/gesture-en.md](docs/gesture-en.md). Everything here, including the changes, is released
+> under AGPL-3.0. Upstream is [ccch1mneyyy/dsh-go](https://github.com/ccch1mneyyy/dsh-go), by
+> [ccch1mneyyy](https://github.com/ccch1mneyyy).
+>
+> **Install:** Version 1.0.18 is arm64 for Android 8.0+ (accessibility screenshots require Android 11+).
+> A community build signed with the same key can be upgraded in place. Android cannot replace an app with a differently signed APK. If installation fails, do not uninstall the current app; that clears chats, settings, plugins and the local runtime.
+
 <p align="center">
-  <a href="https://github.com/ccch1mneyyy/dsh-go/releases/latest"><img alt="Android 8+" src="https://img.shields.io/badge/Android-8%2B-4B67B4?style=flat-square&logo=android&logoColor=white&labelColor=2B3245"></a>
+  <a href="../../releases/latest"><img alt="Android 8+" src="https://img.shields.io/badge/Android-8%2B-4B67B4?style=flat-square&logo=android&logoColor=white&labelColor=2B3245"></a>
   <a href="LICENSE"><img alt="License AGPL-3.0" src="https://img.shields.io/badge/license-AGPL--3.0-4B67B4?style=flat-square&labelColor=2B3245"></a>
   <a href="https://forum.dshtui.com"><img alt="Forum" src="https://img.shields.io/badge/forum-forum.dshtui.com-4B67B4?style=flat-square&labelColor=2B3245"></a>
   <a href="https://qm.qq.com/q/OEy2RqZnqY"><img alt="QQ group 1132118290" src="https://img.shields.io/badge/QQ%20group-1132118290-4B67B4?style=flat-square&logo=tencentqq&logoColor=white&labelColor=2B3245"></a>
@@ -47,7 +65,7 @@
 <p align="center">Get the latest APK from GitHub Releases or the download page at go.dshtui.com. Most phones need the arm64 package.</p>
 
 <p align="center">
-  <a href="https://github.com/ccch1mneyyy/dsh-go/releases/latest"><img alt="Download from GitHub Releases" src="https://img.shields.io/badge/GitHub%20Releases-Download%20APK-4B67B4?style=for-the-badge&logo=github&logoColor=white&labelColor=2B3245"></a>&emsp;<a href="https://go.dshtui.com/download"><img alt="Download from go.dshtui.com" src="https://img.shields.io/badge/go.dshtui.com-Download%20page-4B67B4?style=for-the-badge&labelColor=2B3245"></a>
+  <a href="../../releases/latest"><img alt="Download from GitHub Releases" src="https://img.shields.io/badge/GitHub%20Releases-Download%20APK-4B67B4?style=for-the-badge&logo=github&logoColor=white&labelColor=2B3245"></a>&emsp;<a href="https://go.dshtui.com/download"><img alt="Download from go.dshtui.com" src="https://img.shields.io/badge/go.dshtui.com-Download%20page-4B67B4?style=for-the-badge&labelColor=2B3245"></a>
 </p>
 
 <p align="center">
@@ -186,13 +204,129 @@ Capabilities depend on the host and connection. DSHarness Remote currently accep
 
 Installation requires Android 8.0 (API 26) or later. The **arm64** package on the Releases page is for typical 64-bit Android phones; the x64 package for x86_64 devices and emulators is under “Other builds” at the end of the release notes. This repository has no 32-bit ARM build.
 
-1. Download the APK for your device architecture from [GitHub Releases](https://github.com/ccch1mneyyy/dsh-go/releases/latest) or the [download page](https://go.dshtui.com/download), and follow Android's prompt to allow that installation source.
+1. Download the `arm64` APK from this repository's [Releases](../../releases/latest) (this fork only ships arm64), or get the official build from the upstream [download page](https://go.dshtui.com/download), and follow Android's prompt to allow that installation source.
 2. On first launch, choose an on-device runtime or a remote host.
 3. Configure a model and its credentials for the selected host, then start a conversation. Some remote providers must be configured on the host itself.
 
 A remote-only setup does not need a local runtime on the phone. Phone control works with the local engine outside safe mode and requires permissions such as Accessibility, as explained in the app. Non-disruptive mode additionally requires Android 14 or later and Shizuku or self-ADB. Follow the [user guide](docs/guide/README.md) for setup.
 
 The local engine uses compatible PRoot startup by default. Direct startup is off by default in Developer options; see [Troubleshooting](docs/guide/en/11-faq.md) for compatibility and fallback behavior. The current Android build targets APK sideloading, not Google Play distribution.
+
+<a id="gesture"></a>
+## Coordinate gestures (added by this fork)
+
+Upstream can only tap a point (`tap_xy`); everything else is element-based, and a "long press" is
+hard-wired in the source:
+
+```kotlin
+val duration = if (long) ViewConfiguration.getLongPressTimeout().toLong() + 300 else 60L
+```
+
+`gesture` replaces that with raw-coordinate gestures on the numbered screenshot (`screen` with
+`image`). Every point is a pixel on that screenshot (its W×H), nothing is resolved from the tree,
+and each call is confirmed by you, exactly like `tap_xy`. (The 15th tool, `input` — typing at a
+coordinate — is [below](#input).)
+
+| `kind` | What it does | Required | Optional |
+| --- | --- | --- | --- |
+| `tap` | Tap | `x` `y` | `duration` ms (default 60) |
+| `long` | Press for any duration — 1500, 3000, 9000 ms | `x` `y` | `duration` ms (default 800) |
+| `double` | Double tap | `x` `y` | `gap` 40–300 ms (default 120), `duration` ≤300 |
+| `swipe` | Straight swipe between two points | `x` `y` `x2` `y2` | `duration` ms (default 300) |
+| `path` | Swipe along any path | `points` (2–32 points) | `duration` ms (default 300) |
+| `pinch` | Two-finger pinch | `x` `y` `spread` | `duration` ms (default 300) |
+
+`steps` runs in order: up to 10 steps and 10 strokes within one call, 60 seconds in total. `gap`
+(top level) is the pause between steps (default 120 ms). A `pinch`'s `spread` is the sum of both
+fingers' travel — each finger moves `spread÷2`, positive zooms in, negative zooms out.
+
+Hold for three seconds, swipe up, then double tap:
+
+```json
+{
+  "observation": "s7",
+  "steps": [
+    {"kind": "long",   "x": 540, "y": 1200, "duration": 3000},
+    {"kind": "swipe",  "x": 540, "y": 1500, "x2": 540, "y": 700, "duration": 500},
+    {"kind": "double", "x": 540, "y": 1200}
+  ]
+}
+```
+
+Swipe along an arc, or zoom a photo:
+
+```json
+{"kind": "path",  "points": [[200, 1800], [500, 1500], [800, 1200]], "duration": 600}
+{"kind": "pinch", "x": 540, "y": 900, "spread": 400}
+```
+
+Nothing in the safety boundary was relaxed: gestures are always confirmed, DSH's own UI, system
+permission pages and unreadable screens are still refused, and the background screen (Shizuku /
+self-ADB) still works by element number only. Details, limits and known trade-offs are in
+[docs/gesture-en.md](docs/gesture-en.md) (Chinese: [docs/gesture-zh.md](docs/gesture-zh.md)).
+
+<a id="input"></a>
+## Coordinate input and tapping by text (added by this fork)
+
+Upstream has exactly one way to write text: `type`, which takes an element id. Filling one field took three calls —
+`screen` to find the id, `tap` to focus the field, `type` to write it — and the field the tap opened had a new id by the
+next screen. This fork adds a 15th tool, `input`, which packs tap, focus, write, read-back and keyboard folding into one
+call; `tap` also gains `text`, and `screen` / `scroll` gain `until`.
+
+### `input`: type at a coordinate
+
+| Parameter | Required | Meaning |
+| --- | --- | --- |
+| `observation` | yes | Screen id of the latest `screen`, which must have carried `image`; coordinates are that screenshot's pixels |
+| `x` `y` | yes | Pixel coordinates of the field on the numbered screenshot |
+| `text` | yes | Text to write, at most 2000 characters |
+| `submit` | no | Send one IME enter after writing |
+
+It tries four things in a row on the device and returns only when one of them lands:
+
+1. tap the point and wait for the UI to settle;
+2. find the current focus (`findFocus(FOCUS_INPUT)`) in any window; if it is editable, write with `ACTION_SET_TEXT` and
+   read back every 100 ms for 1.5 s to prove the text arrived (whitespace, hyphens and zero-width characters ignored);
+3. if focus did not land there, hold the point for 600 ms and look again — many WebView pages only focus on a real press;
+4. otherwise use the clipboard: `ACTION_PASTE`, and if the node does not accept a paste, press again and click
+   「粘贴」/「Paste」 by text in the menu that appears.
+
+The back key is sent only when the keyboard really is up (it would cover the next screenshot's coordinates). Password
+fields are refused: the confirmation card shows the app, coordinates and character count but never the text, because the
+focused field could be a password box. The action log stores the length only.
+
+```json
+{"observation": "s7", "x": 540, "y": 760, "text": "13800138000"}
+```
+
+The coordinate guards are the same as `tap_xy`: stale screen id, a point outside the screenshot, DSH's own UI, system
+permission pages, unreadable screens and "cannot confirm the screen still matches" are all refused, and the background
+screen still addresses elements only.
+
+### The other three parameters
+
+- `tap` gains `text`: tap by the words on screen instead of looking up an id first (`id` and `text` are mutually
+  exclusive). Matching runs five tiers — element text equal, row text equal, element text contains, row text contains,
+  `viewId` contains — keeps actionable candidates only, and **refuses an ambiguous match** with the candidate list
+  (`#7「删除」、#8「删除」`) instead of guessing.
+- `screen` gains `until`: wait up to 5 s for that text before returning; `detail:true` now prints element bounds
+  (`left,top-right,bottom`) instead of a centre point.
+- `scroll` gains `until` / `max`: scroll in that direction until the text appears (10 times by default).
+
+Self-test order on a phone: `screen` with `image` → `input` into a normal field → `input` with `submit` → `tap` with
+`text` → `scroll` with `until`. Details and limits are in [docs/input-en.md](docs/input-en.md)
+(Chinese: [docs/input-zh.md](docs/input-zh.md)).
+
+### Build and signing differences in this fork
+
+- Built with `tooling/build-apk.sh --build-name 1.0.15 -f arm64` on Windows, through
+  `toolchain/env-win.sh` (JDK 17, Flutter 3.47.7, Android SDK 36, NDK 28.2.13676358).
+- `runtime/out/arm64-v8a/{assets,jniLibs}` comes from the official upstream `v1.0.13` arm64
+  package, so the runtime is identical to upstream `v1.0.13`. It is gitignored, as upstream does —
+  only the app code differs.
+- There is no `app/android/key.properties`, so the APK is **debug-signed**. Android will refuse to
+  install it over the official release; uninstall that first, which clears app data (credentials
+  and the downloaded runtime). Verify the download against the SHA-256 in the release notes.
 
 ## Data and permissions
 
@@ -259,7 +393,7 @@ The following workflow targets **Linux x86_64**. The toolchain script currently 
 Start with the complete source tree and project assets. Fonts, images and other files declared in `app/pubspec.yaml` are build inputs. The following script generates the runtime bundle.
 
 ```bash
-git clone https://github.com/ccch1mneyyy/dsh-go.git
+git clone <this repository> dsh-go
 cd dsh-go
 
 bash tooling/setup-toolchain.sh
@@ -307,7 +441,7 @@ DSH_BETA_TOKEN_FILE= bash tooling/build-apk.sh --dry-run -f all
 
 ## Contribute
 
-Report bugs and suggest improvements in [Issues](https://github.com/ccch1mneyyy/dsh-go/issues). For code, documentation and translation changes, start with [CONTRIBUTING.en.md](CONTRIBUTING.en.md). Plugin authors can use the [plugin guides](docs/plugins/en/README.md) and [SDK](sdk/plugin-kit/README.en.md).
+Report bugs and suggest improvements in [Issues](../../issues); problems in upstream itself can go to the [upstream issue tracker](https://github.com/ccch1mneyyy/dsh-go/issues). For code, documentation and translation changes, start with [CONTRIBUTING.en.md](CONTRIBUTING.en.md). Plugin authors can use the [plugin guides](docs/plugins/en/README.md) and [SDK](sdk/plugin-kit/README.en.md).
 
 Report security issues through [SECURITY.en.md](SECURITY.en.md). Keep vulnerability details and credentials out of public issues.
 
