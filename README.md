@@ -2,6 +2,10 @@
   <b>简体中文</b> · <a href="README.en.md">English</a>
 </p>
 
+> **1.0.19 候选版：聊天统一手机执行。** 普通聊天可用 `schema:2 run` 在本机执行确定步骤、`if` 和有限 `repeat`；`yield`、视觉动作完成或需要判断时，将进度与可用截图交回原会话，不为执行段创建检查点新聊天。同一发送指令可在首次展示应用、联系人和完整正文并确认后，跨操作段复用授权；变更范围或手机任务结束后重新确认。按应用确认的视觉权限可在应用名单撤销，普通手机操控授权仍独立生效；自动任务页入口继续保留。详见[手机操控指南](docs/guide/zh/04-phone-control.md)和[候选更新日志](docs/changelog.md)。人工真机验收尚未进行，构建及验证状态以交付记录为准。
+
+社区版安装包只从本仓库 Releases 下载；下文原作者官网提供的是上游版本。1.0.16～1.0.18 的内置更新器仍指向上游，请手动下载覆盖升级，不要卸载。后续新版本在 main 的 CI 通过后由 [Android Release](.github/workflows/release.yml) 自动打包发布；维护者更新 `app/pubspec.yaml` 和双语更新日志即可，签名与流程见 [发版说明](docs/release.md#github-自动发版)。
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/assets/hero-zh-dark.webp">
@@ -13,8 +17,20 @@
   DeepSeek Harness 的手机应用：Android 版已发布；iOS 版仍在开发和真机测试，需在 Mac 上自行签名编译（<a href="app/ios/README.md">iOS 工程</a> · <a href="docs/architecture.md">架构</a>）。
 </p>
 
+<blockquote>
+<p><b>本仓库是一个社区 Fork，基线为上游 <code>v1.0.13</code>。</b>手机操控增加了
+<code>gesture</code> 坐标手势、<code>input</code> 坐标输入和 <code>run</code> 多步任务，
+并支持按文字点击、等待和连续滚动。1.0.16 每步重新定位目标、核对前台应用，失败返回进度；
+任务技能、30 项场景分析和本地测试页见 <a href="examples/phone-routines/README.md">手机日常任务包</a>。
+上游不接受外部 PR，所以本仓库独立维护；
+详见<a href="#gesture">坐标手势</a>与 <a href="docs/gesture-zh.md">docs/gesture-zh.md</a>。
+主仓库 <a href="https://github.com/ccch1mneyyy/dsh-go">ccch1mneyyy/dsh-go</a>、原作者 <a href="https://github.com/ccch1mneyyy">ccch1mneyyy</a>。本项目及其改动按 AGPL-3.0 发布，改动部分同样开源。</p>
+<p><b>安装</b>：1.0.18 为 arm64 版，适用于 Android 8.0+；无障碍截图需要 Android 11+。
+同一签名的社区版可覆盖升级保留数据。Android 不允许跨签名覆盖；安装失败时不要卸载当前版本，以免清除对话、设置、插件及本机运行环境。</p>
+</blockquote>
+
 <p align="center">
-  <a href="https://github.com/ccch1mneyyy/dsh-go/releases/latest"><img alt="Android 8+" src="https://img.shields.io/badge/Android-8%2B-4B67B4?style=flat-square&logo=android&logoColor=white&labelColor=2B3245"></a>
+  <a href="../../releases/latest"><img alt="Android 8+" src="https://img.shields.io/badge/Android-8%2B-4B67B4?style=flat-square&logo=android&logoColor=white&labelColor=2B3245"></a>
   <a href="LICENSE"><img alt="许可证 AGPL-3.0" src="https://img.shields.io/badge/%E8%AE%B8%E5%8F%AF%E8%AF%81-AGPL--3.0-4B67B4?style=flat-square&labelColor=2B3245"></a>
   <a href="https://forum.dshtui.com"><img alt="论坛" src="https://img.shields.io/badge/%E8%AE%BA%E5%9D%9B-forum.dshtui.com-4B67B4?style=flat-square&labelColor=2B3245"></a>
   <a href="https://qm.qq.com/q/OEy2RqZnqY"><img alt="QQ 群 1132118290" src="https://img.shields.io/badge/QQ%20%E7%BE%A4-1132118290-4B67B4?style=flat-square&logo=tencentqq&logoColor=white&labelColor=2B3245"></a>
@@ -47,7 +63,7 @@
 <p align="center">从 GitHub Releases 或官网下载页获取最新版 APK，常见手机选 arm64 包。</p>
 
 <p align="center">
-  <a href="https://github.com/ccch1mneyyy/dsh-go/releases/latest"><img alt="从 GitHub Releases 下载" src="https://img.shields.io/badge/GitHub%20Releases-%E4%B8%8B%E8%BD%BD%20APK-4B67B4?style=for-the-badge&logo=github&logoColor=white&labelColor=2B3245"></a>&emsp;<a href="https://go.dshtui.com/download"><img alt="从官网下载页下载" src="https://img.shields.io/badge/go.dshtui.com-%E5%AE%98%E7%BD%91%E4%B8%8B%E8%BD%BD-4B67B4?style=for-the-badge&labelColor=2B3245"></a>
+  <a href="../../releases/latest"><img alt="从 GitHub Releases 下载" src="https://img.shields.io/badge/GitHub%20Releases-%E4%B8%8B%E8%BD%BD%20APK-4B67B4?style=for-the-badge&logo=github&logoColor=white&labelColor=2B3245"></a>&emsp;<a href="https://go.dshtui.com/download"><img alt="从官网下载页下载" src="https://img.shields.io/badge/go.dshtui.com-%E5%AE%98%E7%BD%91%E4%B8%8B%E8%BD%BD-4B67B4?style=for-the-badge&labelColor=2B3245"></a>
 </p>
 
 <p align="center">
@@ -186,13 +202,104 @@ DSH Go 提供聊天界面、本机运行环境和远程连接，是基于 [DeepS
 
 安装要求为 Android 8.0（API 26）及以上。Release 页面上的 **arm64** 安装包适用于常见的 64 位 Android 手机；x86_64 设备和模拟器用的 x64 包在发布说明末尾的「其他版本下载」里。仓库没有 32 位 ARM 构建。
 
-1. 从 [GitHub Releases](https://github.com/ccch1mneyyy/dsh-go/releases/latest) 或[官网下载页](https://go.dshtui.com/download)下载对应架构的 APK，并按系统提示允许该安装来源。
+1. 从本仓库 [Releases](../../releases/latest) 下载 `arm64` 的 APK（本 Fork 只出 arm64），或从上游[官网下载页](https://go.dshtui.com/download)下载官方版，并按系统提示允许该安装来源。
 2. 首次启动时，选择在本机安装运行环境，或连接远程主机。
 3. 为所选主机配置模型和所需凭据，再开始对话；部分远程渠道需要在主机侧配置。
 
 仅连接远程主机时，不必在手机上安装本机运行环境。手机操控只对正常模式下的本机引擎开放，需要按界面说明开启无障碍等权限；不打扰模式另外要求 Android 14 及以上，以及 Shizuku 或自连 ADB。首次使用可按[使用指南](docs/guide/README.md)逐项配置。
 
 本地引擎默认使用 PRoot 兼容启动。开发者选项中的直接启动默认关闭，开启后的兼容性和回退方式见[常见问题](docs/guide/zh/11-faq.md)。当前 Android 构建以 APK 侧载为目标，不是 Google Play 发布配置。
+
+<a id="gesture"></a>
+## 坐标手势（本 Fork 新增）
+
+上游的坐标能力只有「按坐标点一下」（`tap_xy`）；长按只能按元素来，而且时长被写死成
+`ViewConfiguration.getLongPressTimeout() + 300` 毫秒；滑动只能落在列表滚动上。这个 Fork 增加了
+第 14 个工具 `gesture`：参数是一条 **steps** 序列，所有坐标都是最近一次 `screen` 标号截图的像素（图上的 W×H）。
+（第 15 个工具 `input` —— 按坐标写入 —— 见[下一节](#input)。）
+
+| kind | 作用 | 必要参数 | 可选参数 |
+| --- | --- | --- | --- |
+| `tap` | 点击 | `x` `y` | `duration` 毫秒（默认 60） |
+| `long` | **长按任意时长** | `x` `y` | `duration` 毫秒（默认 800，可写 9000） |
+| `double` | 双击 | `x` `y` | `gap` 两次点击间隔 40–300ms（默认 120）、`duration` ≤300ms |
+| `swipe` | 直线滑动 | `x` `y` `x2` `y2` | `duration` 毫秒（默认 300） |
+| `path` | 沿任意路径滑 | `points`：`[[x,y],…]`（2–32 点） | `duration` 毫秒 |
+| `pinch` | 双指缩放 | `x` `y` `spread` 像素（正数放大、负数缩小） | `duration` 毫秒 |
+
+一次最多 10 步、10 个触点、总时长 60 秒（系统 `GestureDescription` 的上限）。顶层 `gap` 指定两步之间停多久（默认 120ms），
+`double` 那两次点击的间隔由该步自己的 `gap` 决定。
+
+典型用法：把列表项按住 3 秒，再上滑，然后双击。
+
+```json
+{
+  "observation": "s7",
+  "steps": [
+    {"kind": "long",   "x": 540, "y": 1200, "duration": 3000},
+    {"kind": "swipe",  "x": 540, "y": 1500, "x2": 540, "y": 700, "duration": 500},
+    {"kind": "double", "x": 540, "y": 1200}
+  ]
+}
+```
+
+想画弧线绕开中间的按钮就用 `path`：`{"kind":"path","points":[[200,1800],[500,1500],[800,1200]],"duration":600}`。
+捏合缩放用 `pinch`：中心 `x` `y`、`spread` 是**每根手指移动量的两倍**（每根手指移动 `spread÷2`），正数放大、负数缩小。
+
+**安全边界没有放松**：坐标手势和 `tap_xy` 一样每次都要你确认；自己 App 的界面、系统权限页、读不到内容的页面照样拒绝；
+后台屏（Shizuku / 自 ADB 那条路）仍然只按元素编号，不接受坐标。实现细节与取舍见 [docs/gesture-zh.md](docs/gesture-zh.md)。
+
+<a id="input"></a>
+## 坐标输入与按文字操作（本 Fork 新增）
+
+上游写文字只有 `type`：先用 `screen` 看清输入框的编号，再 `tap` 那一行，再 `type` —— 同一件事三次调用，而且
+坐标点开的输入框到下一屏编号就变了。这个 Fork 加了第 15 个工具 `input`，把「点坐标 → 找焦点 → 写入 → 回读 →
+收键盘」压成一次调用；另外给 `tap` 加了按文字点、给 `screen` 和 `scroll` 加了 `until`。
+
+### `input`：按坐标写入
+
+| 参数 | 必填 | 说明 |
+| --- | --- | --- |
+| `observation` | 是 | 最近一次 `screen` 的屏幕号（必须带 `image`，坐标是那张标号截图的像素） |
+| `x` `y` | 是 | 输入框在截图上的像素坐标 |
+| `text` | 是 | 要写进去的文字（最多 2000 字） |
+| `submit` | 否 | 写完后按一次输入法回车 |
+
+它在设备端连续试四件事，中间不返回，所以一次调用就有结果：
+
+1. 在坐标上点一下，等界面稳定；
+2. 在所有窗口里找当前焦点（`findFocus(FOCUS_INPUT)`）。焦点是输入框就用 `ACTION_SET_TEXT` 写入，然后每 100ms
+   回读一次、共 1.5 秒，确认文字真的进去了（比较时忽略空白、连字符和零宽字符）；
+3. 焦点没落到输入框，就改成长按 600ms 再找一次 —— 不少页面只有真按住才聚焦；
+4. 还不行就走剪贴板：先把文字放进剪贴板，对焦点发 `ACTION_PASTE`；节点不支持粘贴就再长按，然后在弹出的菜单里
+   按文字点「粘贴」。
+
+写完时如果键盘是升起的，才发一次返回键收起来（键盘会盖住下一张截图的坐标）。密码框一律拒绝：焦点框是不是密码框
+只有聚焦之后才知道，所以确认卡片只显示坐标和字数，不显示要写的文字，操作日志也只记长度。
+
+```json
+{"observation": "s7", "x": 540, "y": 760, "text": "13800138000"}
+```
+
+坐标的守卫和 `tap_xy` 完全一样：屏幕号过期、点不在截图里、自己 App 的界面、系统权限页、读不到内容的页面、
+以及「无法确认界面仍与截图一致」都会拒绝；后台屏仍然只按元素编号，不接受坐标。
+
+### 另外三个参数
+
+- `tap` 加 `text`：按界面上看得见的文字点，不用先查编号。`id` 和 `text` 二选一；一段文字匹配到多个元素会**拒绝并列**，
+  把候选（`#7「删除」`）列出来让你用 `id` 指定 —— 猜错一次就是点错东西，所以不猜。
+- `screen` 加 `until`：等这段文字出现再返回（最多 5 秒），省掉模型自己反复读屏；`detail:true` 现在给的是元素边界
+  （`左上-右下`），不再是中心点，坐标落在哪个元素上更好判断。
+- `scroll` 加 `until` / `max`：一直往这个方向滚到出现这段文字为止（默认最多 10 次），用来看列表深处的内容。
+
+真机自测顺序建议：`screen` 带 `image` → `input` 写一个正常输入框 → `input` 带 `submit` → `tap` 带 `text` 点「登录」
+→ `scroll` 带 `until` 找列表深处的条目。
+
+### 这个 Fork 的构建与签名差异
+
+- APK 由 `tooling/build-apk.sh --build-name 1.0.15 -f arm64` 产出；构建机是 Windows（工具链用 `toolchain/env-win.sh` 适配），
+  运行时包 `runtime/out/arm64-v8a/**` 取自上游官方 `v1.0.13` 的 arm64 安装包（该目录不入库，见 `.gitignore`）。
+- 仓库里没有 `app/android/key.properties`，所以 Release 里的 APK 是 **debug 签名**：装之前必须先卸载官方版，卸载会清掉应用数据。
 
 ## 数据与权限
 
@@ -259,7 +366,7 @@ Android 8 及以上。手机直接下载 Release 页面上的安装包即可，�
 先取得完整源码和项目资源。`app/pubspec.yaml` 声明的字体、图片等都是构建输入，运行时包由下面的脚本生成。
 
 ```bash
-git clone https://github.com/ccch1mneyyy/dsh-go.git
+git clone <本仓库地址> dsh-go
 cd dsh-go
 
 bash tooling/setup-toolchain.sh
@@ -307,7 +414,7 @@ DSH_BETA_TOKEN_FILE= bash tooling/build-apk.sh --dry-run -f all
 
 ## 参与贡献
 
-问题反馈和改进建议可提交到 [Issues](https://github.com/ccch1mneyyy/dsh-go/issues)。代码、文档和翻译贡献请先看 [CONTRIBUTING.md](CONTRIBUTING.md)。插件作者可以从[插件教程](docs/plugins/README.md)和 [SDK](sdk/plugin-kit/README.md)开始。
+问题反馈和改进建议可提交到 [Issues](../../issues)；上游本身的问题也可以报给[上游 Issues](https://github.com/ccch1mneyyy/dsh-go/issues)。代码、文档和翻译贡献请先看 [CONTRIBUTING.md](CONTRIBUTING.md)。插件作者可以从[插件教程](docs/plugins/README.md)和 [SDK](sdk/plugin-kit/README.md)开始。
 
 安全问题请按 [SECURITY.md](SECURITY.md) 报告，避免在公开 Issue 中提交漏洞细节或凭据。
 
