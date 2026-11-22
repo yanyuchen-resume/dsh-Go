@@ -46,10 +46,10 @@ internal object PhonePromptUi {
         HandoffCause.DENY_LIST -> R.string.overlay_handoff_deny_list
     })
 
-    fun label(ctx: Context, choice: PromptChoice): String = AppStrings.get(ctx, when (choice) {
-        PromptChoice.ALLOW_ONCE -> R.string.phone_prompt_allow_once
-        PromptChoice.ALLOW_APP -> R.string.phone_prompt_allow_app
-        PromptChoice.ALLOW_VISUAL -> R.string.phone_prompt_allow_visual
+    fun label(ctx: Context, choice: PromptChoice, content: PromptContent? = null): String = AppStrings.get(ctx, when (choice) {
+        PromptChoice.ALLOW_ONCE -> if (content?.native?.sendScope == true) R.string.phone_prompt_allow_send else R.string.phone_prompt_allow_once
+        PromptChoice.ALLOW_APP -> if (content?.native?.sendScope == true) R.string.phone_prompt_allow_send_visual else R.string.phone_prompt_allow_app
+        PromptChoice.ALLOW_TASK -> R.string.phone_prompt_allow_task
         PromptChoice.REJECT -> R.string.phone_prompt_reject
         PromptChoice.OPEN -> R.string.phone_prompt_open
         PromptChoice.LATER -> R.string.phone_prompt_later
@@ -95,10 +95,10 @@ internal object PhonePromptUi {
         p.ticket.onFinished { main.removeCallbacks(tick) }
         val armedAt = SystemClock.elapsedRealtime() + 600
         for (choice in p.ticket.content.choices) {
-            val primary = choice in setOf(PromptChoice.ALLOW_ONCE, PromptChoice.ALLOW_APP, PromptChoice.ALLOW_VISUAL,
+            val primary = choice in setOf(PromptChoice.ALLOW_ONCE, PromptChoice.ALLOW_APP, PromptChoice.ALLOW_TASK,
                 PromptChoice.OPEN, PromptChoice.CONTINUE)
-            val b = PromptButton(ctx, armedAt) { p.live }.apply {
-                text = label(ctx, choice)
+            val b = PromptButton(ctx, armedAt, p).apply {
+                text = label(ctx, choice, p.ticket.content)
                 textSize = 15f; typeface = Typeface.DEFAULT_BOLD
                 setTextColor(if (primary) onAccent else ink)
                 minimumHeight = dp(ctx, 48); minimumWidth = dp(ctx, 48)
@@ -150,14 +150,14 @@ internal object PhonePromptUi {
     private fun dp(ctx: Context, value: Int) = (ctx.resources.displayMetrics.density * value).toInt()
 
     /** Same injected/obscured-input boundary as ControlOverlay, also used by the Activity fallback. */
-    internal class PromptButton(ctx: Context, private val armedAt: Long, private val live: () -> Boolean) : TextView(ctx) {
+    private class PromptButton(ctx: Context, private val armedAt: Long, private val p: PromptPresentation) : TextView(ctx) {
         private val a11y = ctx.getSystemService(AccessibilityManager::class.java)
         private var rejected = false
         init { filterTouchesWhenObscured = true; isClickable = true; isFocusable = true; gravity = Gravity.CENTER }
 
         override fun dispatchTouchEvent(event: MotionEvent): Boolean {
             if (event.actionMasked == MotionEvent.ACTION_DOWN) {
-                rejected = !PromptInputPolicy.allows(SystemClock.elapsedRealtime(), armedAt, live(), InjectGuard.active(),
+                rejected = !PromptInputPolicy.allows(SystemClock.elapsedRealtime(), armedAt, p.live, InjectGuard.active(),
                     event.flags and (MotionEvent.FLAG_WINDOW_IS_OBSCURED or MotionEvent.FLAG_WINDOW_IS_PARTIALLY_OBSCURED) != 0)
             }
             if (rejected) {
@@ -167,14 +167,9 @@ internal object PhonePromptUi {
             return super.dispatchTouchEvent(event)
         }
 
-        override fun performClick(): Boolean {
-            if (!PromptInputPolicy.allows(SystemClock.elapsedRealtime(), armedAt, live(), InjectGuard.active(), false)) return false
-            return super.performClick()
-        }
-
         override fun performAccessibilityAction(action: Int, arguments: Bundle?): Boolean {
             if ((action == AccessibilityNodeInfo.ACTION_CLICK || action == AccessibilityNodeInfo.ACTION_LONG_CLICK) &&
-                (!live() || SystemClock.elapsedRealtime() < armedAt || InjectGuard.active() || !a11y.isTouchExplorationEnabled)) return false
+                (!p.live || SystemClock.elapsedRealtime() < armedAt || InjectGuard.active() || !a11y.isTouchExplorationEnabled)) return false
             return super.performAccessibilityAction(action, arguments)
         }
     }
