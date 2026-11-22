@@ -10,18 +10,14 @@ data class PhonePolicies(
     val confirmEveryWritePackages: List<String> = SafetyRules.DEFAULT_CONFIRM_EVERY_WRITE,
     val confirmMode: ConfirmMode = ConfirmMode.ASK,
     val unlocks: PhoneUnlocks = PhoneUnlocks(),
-    /** 始终允许: the master switch for [alwaysAllowPackages]. Off by default. */
-    val alwaysAllowEnabled: Boolean = false,
-    /** 始终允许的 App: set only from 设置 › 手机操控 › 始终允许, never from a confirmation. */
-    val alwaysAllowPackages: List<String> = emptyList(),
+    val visualPackages: List<String> = emptyList(),
 ) {
     fun toMap(): Map<String, Any?> = linkedMapOf(
         "denyPackages" to denyPackages,
         "confirmEveryWritePackages" to confirmEveryWritePackages,
         "confirmMode" to confirmMode.wire,
         "unlocks" to unlocks.toMap(),
-        "alwaysAllowEnabled" to alwaysAllowEnabled,
-        "alwaysAllowPackages" to alwaysAllowPackages,
+        "visualPackages" to visualPackages,
     )
 
     companion object {
@@ -32,18 +28,13 @@ data class PhonePolicies(
                 return raw.mapNotNull { (it as? String)?.trim()?.takeIf { s -> PACKAGE.matches(s) } }.distinct()
             }
             return PhonePolicies(
-                denyPackages = list("denyPackages", base.denyPackages),
-                confirmEveryWritePackages = list("confirmEveryWritePackages", base.confirmEveryWritePackages),
-                confirmMode = ConfirmMode.fromWire(map?.get("confirmMode") as? String) ?: base.confirmMode,
-                unlocks = PhoneUnlocks.fromMap(map?.get("unlocks") as? Map<*, *>, base.unlocks),
-                alwaysAllowEnabled = map?.get("alwaysAllowEnabled") as? Boolean ?: base.alwaysAllowEnabled,
-                alwaysAllowPackages = list("alwaysAllowPackages", base.alwaysAllowPackages),
+                list("denyPackages", base.denyPackages),
+                list("confirmEveryWritePackages", base.confirmEveryWritePackages),
+                ConfirmMode.fromWire(map?.get("confirmMode") as? String) ?: base.confirmMode,
+                PhoneUnlocks.fromMap(map?.get("unlocks") as? Map<*, *>, base.unlocks),
+                list("visualPackages", base.visualPackages),
             )
         }
-
-        /** `setPolicies`: null when it would lift a hard rule while [busy] (some task may still act). */
-        fun update(map: Map<*, *>?, base: PhonePolicies, busy: () -> Boolean): PhonePolicies? =
-            fromMap(map, base).takeUnless { it.unlocks.lifts(base.unlocks) && busy() }
 
         private val PACKAGE = Regex("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z0-9_]+)+")
     }
@@ -64,10 +55,6 @@ data class PhoneUnlocks(
     val ownApp: Boolean = false,
 ) {
     val any: Boolean get() = systemPages || secretFields || ownApp
-
-    /** Lifts some rule [before] kept; turning rules back on never counts. */
-    fun lifts(before: PhoneUnlocks): Boolean =
-        systemPages && !before.systemPages || secretFields && !before.secretFields || ownApp && !before.ownApp
 
     fun toMap(): Map<String, Any?> = linkedMapOf(
         "systemPages" to systemPages,
@@ -96,10 +83,10 @@ enum class ConfirmMode(val wire: String) {
     /** 每次都询问 (default): first step in each app, sensitive words, every-write apps, tap_xy. */
     ASK("ask"),
 
-    /** 本轮允许 = 本轮不再询问: the same 本轮允许 button waives the rest of this turn. */
+    /** 本任务免确认: the first question of a task offers to waive the rest of that task. */
     TASK("task"),
 
-    /** Confirmation waiver; hard rules still apply. */
+    /** 始终免确认: nothing is asked. */
     ALWAYS("always");
 
     companion object {
@@ -179,7 +166,7 @@ object SafetyRules {
 }
 
 /** The kinds of writes the gate distinguishes. */
-enum class WriteKind { TAP, LONG_TAP, TYPE, TAP_XY, SCROLL, KEY }
+enum class WriteKind { TAP, LONG_TAP, TYPE, TAP_XY, GESTURE, INPUT, SCROLL, KEY }
 
 /**
  * Applies the safety rules to one action and asks the person when a rule says so, through [gate]
@@ -193,19 +180,12 @@ class SafetyGate(
     private val gate: () -> UserGate?,
     private val ownPackage: String = SafetyRules.OWN_PACKAGE,
     private val uiText: PhoneUiText = PhoneUiText.DEFAULT,
+    private val onVisualApproved: (String) -> Boolean = { false },
 ) {
     sealed interface Verdict {
         object Allow : Verdict
         class Refuse(val message: String, val rule: String) : Verdict
-        class Confirm(
-            val request: ConfirmRequest,
-            val packageName: String?,
-            val reason: String,
-            /** This step only: no 本轮允许 offer. */
-            internal val onlyOnce: Boolean = false,
-            /** 本轮 allow key (app + kind); null when this question offers no round grant. */
-            internal val grant: String? = null,
-        ) : Verdict
+        class Confirm(val request: ConfirmRequest, val packageName: String?, val reason: String, val send: SendScope? = null) : Verdict
     }
 
     /** The outcome of asking (or of not needing to ask). */
@@ -219,13 +199,8 @@ class SafetyGate(
     fun labelOf(pkg: String?, appLabel: String?) = appLabel ?: pkg ?: "当前应用"
 
     /** Reads (screen, collect, the screen attached to results): own app and deny list refuse. */
-    fun checkRead(pkg: String?, appLabel: String?): Verdict.Refuse? = checkRead(policies(), pkg, appLabel)
-
-    /** Shares the caller's final result snapshot with screen filtering; per-page gates stay live. */
-    internal fun checkReadSources(p: PhonePolicies, packages: Iterable<String?>): Verdict.Refuse? =
-        packages.firstNotNullOfOrNull { checkRead(p, it, null) }
-
-    private fun checkRead(p: PhonePolicies, pkg: String?, appLabel: String?): Verdict.Refuse? {
+    fun checkRead(pkg: String?, appLabel: String?): Verdict.Refuse? {
+        val p = policies()
         if (pkg == ownPackage && !p.unlocks.ownApp) return Verdict.Refuse(OWN_APP, "own-app")
         if (pkg != null && pkg in p.denyPackages) return Verdict.Refuse(denied(labelOf(pkg, appLabel)), "deny-list")
         return null
@@ -252,9 +227,11 @@ class SafetyGate(
         typed: String? = null,
         submit: Boolean = false,
         point: Pair<Int, Int>? = null,
-        coordinate: PhoneAction.TapXY? = null,
-        screen: PhoneScreen = PhoneScreen.MAIN,
-        visual: VisualTarget? = null,
+        /** What a gesture does, in words (it has no single point to name). */
+        note: String? = null,
+        /** Only this local routine was approved; never changes task-wide waiver state. */
+        batchApproved: Boolean = false,
+        send: SendScope? = null,
     ): Verdict {
         val app = labelOf(pkg, appLabel)
         if (kind == WriteKind.KEY) return Verdict.Allow // back / home / recents / shade: always a way out
@@ -272,124 +249,121 @@ class SafetyGate(
             // l10n:keep agent safety result
             return Verdict.Refuse("密码 / 验证码 / 支付框不代填也不代点。请 handoff 让用户输入。", "secret-field")
         }
+        val actionApp = appLabel ?: pkg ?: uiText.get("phone_current_app", "当前应用") // l10n:keep test default
+        var action = describe(kind, target, actionApp, if (secret) SafetyRules.MASK else typed, submit, point, note)
+        val word = if (kind == WriteKind.TAP || kind == WriteKind.LONG_TAP) SafetyRules.sensitiveWord(target?.label, target?.viewId) else null
+        if (send != null) {
+            // A label/id can contain more than one intent (for example "发送红包" or send_payment).
+            val otherSensitive = kind in setOf(WriteKind.TAP, WriteKind.LONG_TAP) && target != null && (
+                SensitiveWords.confirmHit(target.label?.replace("发送", "")?.replace(Regex("\\bsend\\b", RegexOption.IGNORE_CASE), ""), null) != null || // l10n:keep external UI matcher
+                    SensitiveWords.idWords(target.viewId).any { it != "send" && it in SensitiveWords.confirmIdWords })
+            val mismatch = when {
+                send.app != pkg -> "app"
+                secret -> "secret-field"
+                kind !in setOf(WriteKind.TAP, WriteKind.LONG_TAP, WriteKind.TYPE, WriteKind.INPUT, WriteKind.TAP_XY) -> "action"
+                typed != null && typed != send.text && (typed != send.recipient || submit) -> "text"
+                otherSensitive || (word != null && word !in setOf("发送", "send")) -> "action" // l10n:keep external UI matcher
+                else -> null
+            }
+            if (mismatch != null) return Verdict.Refuse("这一步超出已声明的发送范围，没有执行。请核对应用、联系人、正文和动作。", "send-scope-$mismatch-mismatch") // l10n:keep agent safety result
+            action = uiText.get("phone_confirm_send_scope", "授权本次发送：\n应用：%1\$s\n联系人：%2\$s\n完整消息：\n%3\$s\n\n确认后，同一手机任务内搜索、输入、粘贴和发送共用这次授权。更换应用、联系人或正文需重新确认。请核对当前聊天对象和草稿。", actionApp, send.recipient, send.text) // l10n:keep test default
+        }
+        val coordinate = kind in setOf(WriteKind.TAP_XY, WriteKind.GESTURE, WriteKind.INPUT)
+        if (coordinate && pkg == null) return Verdict.Refuse("无法确认前台应用，没有操作。", "foreground-unknown") // l10n:keep agent safety result
+        if (coordinate && pkg !in p.visualPackages) {
+            val sentence = uiText.get("phone_confirm_visual_app", "允许 DSH 在「%1\$s」使用截图定位执行这一步：%2\$s？选择本应用本任务会记住视觉权限；仅此一步不会保存。操作仍遵守手机操控授权。可在应用名单撤销。", app, action) // l10n:keep test default
+            return Verdict.Confirm(ConfirmRequest(sentence, appLabel ?: pkg, pkg, firstInApp = true, sendScope = send != null), pkg, "visual-access", send)
+        }
+        if (send != null) {
+            if (tasks.isSendApproved(send)) return Verdict.Allow
+            return Verdict.Confirm(ConfirmRequest(action, appLabel ?: pkg, pkg, firstInApp = false, sendScope = true), pkg, "send-scope", send)
+        }
+        // A screenshot cannot identify a password or verification field. Blind text input
+        // therefore remains individually confirmed even after visual access or global approval.
+        if (kind == WriteKind.INPUT && target == null && !lifted.secretFields) {
+            return Verdict.Confirm(
+                ConfirmRequest(action, appLabel ?: pkg, pkg, firstInApp = false, offerTaskWaiver = false),
+                pkg,
+                "visual-input",
+            )
+        }
         // Everything above is a hard rule (or one the person lifted); everything below only asks.
-        val eligibleVisual = kind == WriteKind.TAP_XY && coordinate != null && eligibleCoordinate(coordinate, visual, p)
-        val forceOnce = kind == WriteKind.TAP_XY && !eligibleVisual
+        if (waived(p) && !batchApproved) return Verdict.Allow
         val everyWrite = pkg != null && pkg in p.confirmEveryWritePackages
-        val firstInApp = !forceOnce && !everyWrite && (pkg == null || !tasks.isApproved(pkg))
-        val word = if (kind == WriteKind.TAP || kind == WriteKind.LONG_TAP || kind == WriteKind.TAP_XY) SafetyRules.sensitiveWord(target?.label, target?.viewId) else null
+        val firstInApp = !everyWrite && (pkg == null || !tasks.isApproved(pkg))
         val reason = when {
-            forceOnce -> "tap_xy"
             kind == WriteKind.TYPE && submit -> "submit"
             word != null -> "sensitive:$word"
             everyWrite -> "every-write"
-            firstInApp -> "first-in-app"
+            firstInApp && !batchApproved -> "first-in-app"
             else -> return Verdict.Allow
         }
-        // A task/global waiver also answers coordinate questions; App grants stay scoped.
-        if (waived(p) || (!forceOnce && roundGranted(p, pkg, reason))) return Verdict.Allow
-        val actionApp = appLabel ?: pkg ?: uiText.get("phone_current_app", "当前应用") // l10n:keep test default
-        val action = describe(kind, target, actionApp, if (secret) SafetyRules.MASK else typed, submit, point, coordinate) +
-            if (kind == WriteKind.TAP_XY && screen == PhoneScreen.BACKGROUND)
-                uiText.get("phone_confirm_background_coordinate", "。这是最近后台截图的位置，请核对目标。此确认卡不含原截图。") else "" // l10n:keep test default
         val sentence = if (reason == "first-in-app") uiText.get("phone_confirm_first_app", "允许 DSH 在本任务中操作「%1\$s」？第一步：%2\$s", actionApp, action) else action // l10n:keep test default
         return Verdict.Confirm(
-            ConfirmRequest(sentence = sentence, appLabel = appLabel ?: pkg, packageName = pkg, firstInApp = firstInApp),
+            ConfirmRequest(sentence = sentence, appLabel = appLabel ?: pkg, packageName = pkg, firstInApp = firstInApp, offerTaskWaiver = p.confirmMode == ConfirmMode.TASK),
             pkg,
             reason,
-            grant = PhoneTasks.grantKey(pkg, reason),
         )
-    }
-
-    /** 本轮 → 始终: either grant answers without asking. */
-    private fun roundGranted(p: PhonePolicies, pkg: String?, reason: String): Boolean =
-        tasks.hasGrant(pkg, reason) || (p.alwaysAllowEnabled && pkg != null && pkg in p.alwaysAllowPackages)
-
-    /** A driver proof never waives sensitive, per-write or non-tap policy. */
-    private fun eligibleCoordinate(action: PhoneAction.TapXY, visual: VisualTarget?, policy: PhonePolicies): Boolean {
-        if (action.gesture != PhoneAction.CoordinateGesture.TAP || visual == null) return false
-        val target = visual.target
-        return target.screenId == action.screenId && target.packageName == visual.scope.packageName &&
-            !SafetyRules.isSecretTarget(target) && SafetyRules.sensitiveWord(target.label, target.viewId) == null &&
-            visual.scope.packageName !in policy.confirmEveryWritePackages
-    }
-
-    /** App grants do not fill this slot; a task/global waiver skips the question. */
-    fun checkVisual(action: PhoneAction.TapXY, visual: VisualTarget, owner: PhoneTasks.Owner): Verdict {
-        val t = visual.target
-        val ordinary = checkWrite(WriteKind.TAP_XY, t, t.packageName, t.appLabel,
-            coordinate = action, point = action.x to action.y, screen = visual.scope.screen, visual = visual)
-        if (ordinary is Verdict.Refuse) return ordinary
-        if (ordinary is Verdict.Confirm && ordinary.reason == "tap_xy") return ordinary
-        if (waived() || tasks.hasVisualGrant(owner, visual.scope)) return Verdict.Allow
-        val app = labelOf(visual.scope.packageName, t.appLabel)
-        val sentence = if (visual.scope.screen == PhoneScreen.MAIN)
-            uiText.get("phone_confirm_visual_main", "允许本任务在「%1\$s」当前窗口内，对明确识别的普通目标使用截图点击？未知或敏感目标仍逐次确认。", app) // l10n:keep test default
-        else uiText.get("phone_confirm_visual_background", "允许本任务在「%1\$s」当前后台任务范围内，对明确识别的普通目标使用截图点击？未知或敏感目标仍逐次确认；本卡不含原截图。", app) // l10n:keep test default
-        return Verdict.Confirm(ConfirmRequest(sentence, t.appLabel ?: t.packageName, t.packageName,
-            firstInApp = false, allowRound = false, visualScope = visual.scope), t.packageName, "first-visual")
     }
 
     /** Nothing more to ask: 始终免确认, or 本任务免确认 already granted for this task. */
     fun waived(p: PhonePolicies = policies()): Boolean =
         p.confirmMode == ConfirmMode.ALWAYS || (p.confirmMode == ConfirmMode.TASK && tasks.isWaived)
 
-    /**
-     * A plain confirmation the core needs outside [checkWrite] (moving an app to the background
-     * screen, or an unknown intent handler). 本轮允许 answers the same app and kind for this turn.
-     */
+    /** A plain confirmation the core needs outside [checkWrite] (moving an app to the background screen). */
     fun confirmation(sentence: String, pkg: String?, appLabel: String?, reason: String): Verdict {
         val p = policies()
-        if (waived(p) || roundGranted(p, pkg, reason)) return Verdict.Allow
-        val request = ConfirmRequest(sentence = sentence, appLabel = appLabel ?: pkg, packageName = pkg, firstInApp = false)
-        return Verdict.Confirm(request, pkg, reason, grant = PhoneTasks.grantKey(pkg, reason))
+        if (waived(p)) return Verdict.Allow
+        val request = ConfirmRequest(sentence = sentence, appLabel = appLabel ?: pkg, packageName = pkg, firstInApp = false, offerTaskWaiver = p.confirmMode == ConfirmMode.TASK)
+        return Verdict.Confirm(request, pkg, reason)
     }
-
-    /** Independent operation consent only; callers must check target/policy hard rules first.
-     * This never grants authority over a new target or waives subsequent checks.
-     */
-    internal fun confirmationOnce(sentence: String, pkg: String?, appLabel: String?, reason: String): Verdict =
-        Verdict.Confirm(ConfirmRequest(sentence = sentence, appLabel = appLabel ?: pkg,
-            packageName = pkg, firstInApp = false, allowRound = false), pkg, reason, onlyOnce = true)
 
     /** Resolves a verdict, asking the person if needed. InterruptedException means stop. */
-    fun resolve(verdict: Verdict, scope: SerialWorker.Scope, owner: PhoneTasks.Owner? = null): Result = when (verdict) {
+    fun resolve(verdict: Verdict, scope: SerialWorker.Scope): Result = when (verdict) {
         Verdict.Allow -> Result.Go("allowed")
         is Verdict.Refuse -> Result.No(verdict.message, "refused:${verdict.rule}")
-        is Verdict.Confirm -> ask(verdict, scope, owner)
+        is Verdict.Confirm -> ask(verdict, scope)
     }
 
-    private fun ask(v: Verdict.Confirm, scope: SerialWorker.Scope, admittedOwner: PhoneTasks.Owner?): Result {
-        val g = gate() ?: return Result.No(PhoneTasks.NO_CONFIRM_MESSAGE + "。", "refused:no-gate")
-        val owner = admittedOwner ?: tasks.activeOwner() ?: return stopped()
-        val decision = scope.userWait { g.confirm(v.request.copy(owner = owner)) }
+    private fun ask(v: Verdict.Confirm, scope: SerialWorker.Scope): Result {
+        val g = gate() ?: return Result.No(
+            // l10n:keep agent safety result
+            "这一步需要用户确认，但现在没办法问用户：请用户允许 DSH 发通知，或开启 DSH 的无障碍（悬浮条确认）。",
+            "refused:no-gate",
+        )
+        val owner = tasks.activeOwner() ?: return stopped()
+        val decision = scope.userWait { g.confirm(v.request) }
         // A real tap is not authority over a task that replaced the one being asked about.
         if (!tasks.isCurrent(owner)) return stopped()
-        if (v.onlyOnce && decision != Decision.ALLOW_ONCE && decision != Decision.DENY &&
-            decision != Decision.STOP && decision != Decision.UNAVAILABLE)
-            return Result.No("确认返回了本请求不提供的权限，未继续操作；不要自动重试。", "denied") // l10n:keep
-        if (v.request.visualScope != null && decision == Decision.ALLOW_APP_FOR_TASK)
-            return Result.No("确认返回了本请求不提供的权限，未继续操作；不要自动重试。", "denied") // l10n:keep
+        if (v.reason == "visual-access" && decision == Decision.ALLOW_APP_FOR_TASK) {
+            val pkg = v.packageName ?: return stopped()
+            if (!onVisualApproved(pkg)) return Result.No("视觉权限保存失败或前台应用已变化，没有操作。", "refused:visual-grant") // l10n:keep agent safety result
+            if (!tasks.confirmIfCurrent(owner, pkg = pkg.takeUnless { v.send != null || it in policies().confirmEveryWritePackages })) return stopped()
+        }
         return when (decision) {
-            Decision.ALLOW_VISUAL_FOR_TASK -> {
-                val visual = v.request.visualScope
-                if (visual != null && tasks.confirmVisualIfCurrent(owner, visual)) Result.Go("confirmed-visual") else stopped()
-            }
-            Decision.ALLOW_ONCE -> if (tasks.confirmIfCurrent(owner)) Result.Go("confirmed") else stopped()
+            Decision.ALLOW_ONCE -> if (tasks.confirmIfCurrent(owner, send = v.send)) Result.Go("confirmed") else stopped()
             Decision.ALLOW_APP_FOR_TASK -> {
-                // 本轮允许: record this app + kind for the rest of the turn (or waive it in 本任务免确认 mode).
                 val pkg = v.packageName
-                val approved = pkg?.takeUnless { it in policies().confirmEveryWritePackages }
-                val waive = policies().confirmMode == ConfirmMode.TASK
-                if (tasks.confirmIfCurrent(owner, pkg = approved, waiveTask = waive, grant = v.grant))
-                    Result.Go("confirmed-app") else stopped()
+                val approved = pkg?.takeUnless { v.send != null || it in policies().confirmEveryWritePackages }
+                if (tasks.confirmIfCurrent(owner, pkg = approved, send = v.send)) Result.Go("confirmed-app") else stopped()
             }
-            Decision.DENY -> Result.No(PhoneTasks.CANCELLED_MESSAGE + "。", "denied")
+            Decision.ALLOW_ALL_FOR_TASK -> {
+                if (v.send != null) {
+                    if (tasks.confirmIfCurrent(owner, send = v.send)) Result.Go("confirmed-send") else stopped()
+                } else if (tasks.confirmIfCurrent(owner, waiveTask = true)) Result.Go("confirmed-task") else stopped()
+            }
+            // l10n:keep agent safety result
+            Decision.DENY -> Result.No("用户拒绝了这一步（或 30 秒内没有选择）。不要重试同一个动作；换个做法，或问用户想怎么做。", "denied")
             Decision.STOP -> {
+                // l10n:keep agent safety result
                 tasks.stopIfCurrent(owner, "用户在确认时选择了停止")
                 Result.No(PhoneTasks.STOPPED_MESSAGE + "。", "stopped")
             }
-            Decision.UNAVAILABLE -> Result.No(PhoneTasks.NO_CONFIRM_MESSAGE + "。", "refused:no-gate")
+            Decision.UNAVAILABLE -> Result.No(
+                // l10n:keep agent safety result
+                "这一步需要用户确认，但确认界面现在不可用。请用户打开 DSH Go 检查通知与手机操控设置；不要自动重试操作。",
+                "refused:no-gate",
+            )
         }
     }
 
@@ -400,19 +374,13 @@ class SafetyGate(
      * apps and secure windows. Images go with the text they belong to; a screen with a bank card or
      * ID number (masked in the text) keeps its text but loses the image.
      */
-    fun filterScreen(s: ScreenSnapshot): ScreenSnapshot = filterScreen(s, policies())
-
-    internal fun filterScreen(s: ScreenSnapshot, p: PhonePolicies): ScreenSnapshot {
-        val sourceRefusal = s.readPackages.firstNotNullOfOrNull { checkRead(p, it, null) }
+    fun filterScreen(s: ScreenSnapshot): ScreenSnapshot {
+        val p = policies()
         val refusal = when {
             s.packageName == ownPackage && !p.unlocks.ownApp -> OWN_APP
             s.packageName != null && s.packageName in p.denyPackages -> denied(labelOf(s.packageName, s.appLabel))
-            sourceRefusal != null -> sourceRefusal.message
             // l10n:keep agent safety result
             s.secure -> "安全窗口（禁止截屏 / 读取）。要操作请 handoff。"
-            s.image != null && s.imageReadPackages.any { checkRead(p, it, null) != null } ->
-                // l10n:keep agent safety result
-                return s.copy(text = s.text + "\n提示：截图范围包含当前不允许读取的应用，这次没有附截图。", image = null, imageMime = null)
             // l10n:keep agent safety result
             s.image != null && ("«银行卡" in s.text || "«身份证" in s.text) ->
                 // l10n:keep agent safety result
@@ -421,21 +389,19 @@ class SafetyGate(
         }
         val app = s.appLabel?.let { " · $it" } ?: ""
         // l10n:keep agent safety result
-        return s.copy(text = "屏幕 ${s.id}$app\n$refusal", image = null, imageMime = null, focus = null)
+        return s.copy(text = "屏幕 ${s.id}$app\n$refusal", image = null, imageMime = null, visibleTexts = emptyList())
     }
 
-    private fun describe(kind: WriteKind, t: TargetInfo?, app: String, typed: String?, submit: Boolean, point: Pair<Int, Int>?, coordinate: PhoneAction.TapXY?): String {
+    private fun describe(kind: WriteKind, t: TargetInfo?, app: String, typed: String?, submit: Boolean, point: Pair<Int, Int>?, note: String?): String {
         val label = t?.label?.takeIf { it.isNotBlank() }?.let { SafetyRules.quoteText(it, 30) } ?: t?.role?.let(uiText::role) ?: uiText.get("phone_confirm_element", "元素") // l10n:keep test default
         return when (kind) {
             WriteKind.TAP -> uiText.get("phone_confirm_tap", "在「%1\$s」点「%2\$s」", app, label) // l10n:keep test default
             WriteKind.LONG_TAP -> uiText.get("phone_confirm_long_tap", "在「%1\$s」长按「%2\$s」", app, label) // l10n:keep test default
             WriteKind.TYPE -> uiText.get("phone_confirm_type", "在「%1\$s」的「%2\$s」输入：\"%3\$s\"", app, label, if (typed == SafetyRules.MASK) typed else SafetyRules.quoteText(typed ?: "")) + if (submit) uiText.get("phone_confirm_submit", "，然后发送 / 提交") else "" // l10n:keep test default
-            WriteKind.TAP_XY -> when (coordinate?.gesture) {
-                PhoneAction.CoordinateGesture.LONG -> uiText.get("phone_confirm_coordinate_long", "在「%1\$s」长按截图位置 (%2\$s, %3\$s)", app, point?.first.toString(), point?.second.toString())
-                PhoneAction.CoordinateGesture.SWIPE -> uiText.get("phone_confirm_coordinate_swipe", "在「%1\$s」从 (%2\$d,%3\$d) 滑动到 (%4\$d,%5\$d)，%6\$d 毫秒", app, coordinate.x, coordinate.y, coordinate.x2 ?: -1, coordinate.y2 ?: -1, coordinate.durationMs)
-                else -> uiText.get("phone_confirm_tap_xy", "在「%1\$s」点截图上的位置 (%2\$s, %3\$s)", app, point?.first.toString(), point?.second.toString())
-            } // l10n:keep test defaults
+            WriteKind.TAP_XY -> uiText.get("phone_confirm_tap_xy", "在「%1\$s」点截图上的位置 (%2\$s, %3\$s)", app, point?.first.toString(), point?.second.toString()) // l10n:keep test default
+            WriteKind.INPUT -> uiText.get("phone_confirm_input", "在「%1\$s」按截图上的位置 (%2\$s, %3\$s) 输入：\"%4\$s\"", app, point?.first.toString(), point?.second.toString(), if (typed == SafetyRules.MASK) typed else typed.orEmpty()) + if (submit) uiText.get("phone_confirm_submit", "，然后发送 / 提交") else "" // l10n:keep test default
             WriteKind.SCROLL -> uiText.get("phone_confirm_scroll", "在「%1\$s」滚动", app) // l10n:keep test default
+            WriteKind.GESTURE -> uiText.get("phone_confirm_gesture", "在「%1\$s」做手势：%2\$s", app, note ?: "") // l10n:keep test default
             WriteKind.KEY -> uiText.get("phone_confirm_key", "按系统键") // l10n:keep test default
         }
     }
