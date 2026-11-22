@@ -17,10 +17,7 @@ class PhoneTasks(
     private val clock: () -> Long = System::currentTimeMillis,
     val idleMs: Long = 3 * 60_000L,
     val stopHoldMs: Long = 30_000L,
-    private val idSource: (() -> Long)? = null,
 ) {
-    enum class StopSource { USER, SCREEN_OFF, ENVIRONMENT }
-
     data class Snapshot(
         val id: Long,
         val active: Boolean,
@@ -34,13 +31,9 @@ class PhoneTasks(
         val waived: Boolean = false,
         /** Native-only lifetime; never inferred from a session id or a Flutter page. */
         internal val lifecycle: Long = 0,
-        /** This stop hold interrupted a task whose public active projection was true. */
-        val interrupted: Boolean = false,
-        val stopSource: StopSource? = null,
     ) {
         fun toMap(): Map<String, Any?> =
-            linkedMapOf("id" to id, "active" to active, "app" to app, "paused" to paused, "stopped" to stopped,
-                "waived" to waived, "interrupted" to interrupted, "stopSource" to stopSource?.name)
+            linkedMapOf("id" to id, "active" to active, "app" to app, "paused" to paused, "stopped" to stopped, "waived" to waived)
     }
 
     sealed interface Begin {
@@ -54,20 +47,13 @@ class PhoneTasks(
     private var nextId = 1L
     private var taskId = 0L
     private var lifecycle = 0L
-    private var admissionEpoch = 0L
     private var active = false
     private var lastCallAt = 0L
     private var stoppedUntil = 0L
     private var stopReason: String? = null
-    private var stopSource: StopSource? = null
-    private var interrupted = false
     private val approved = LinkedHashSet<String>()
-    // 本轮允许: app + 动作类别 granted for this turn only; endLocked clears it.
-    private val grants = LinkedHashSet<String>()
+    private var sendApproval: Pair<Long, String>? = null
     private var waived = false
-    private var visualLifecycle = -1L
-    private val visualScopes = mutableMapOf<PhoneScreen, VisualScope>()
-    private val visualGrants = mutableMapOf<PhoneScreen, VisualScope>()
     private val notified = HashSet<String>()
     private var app: String? = null
     private var paused = false
@@ -84,24 +70,20 @@ class PhoneTasks(
     }
 
     /** Called at the start of every phone tool call. */
-    internal fun admissionEpoch(): Long = synchronized(lock) { admissionEpoch }
-
-    fun begin(expectedEpoch: Long? = null): Begin {
+    fun begin(): Begin {
         var started = false
         val result: Begin
         synchronized(lock) {
-            if (expectedEpoch != null && expectedEpoch != admissionEpoch) return Begin.Refused(STOPPED_MESSAGE)
             val now = clock()
             if (now < stoppedUntil) {
                 stoppedUntil = now + stopHoldMs
-                return Begin.Refused(if (stopSource == StopSource.USER) STOPPED_MESSAGE else ENV_STOPPED_MESSAGE)
+                return Begin.Refused(STOPPED_MESSAGE + (stopReason?.let { "（$it）" } ?: ""))
             }
-            interrupted = false
             // This call is in flight already, so only the pause and the clock count here.
             if (active && !paused && now - lastCallAt > idleMs) endLocked()
             if (!active) {
                 active = true
-                taskId = idSource?.invoke() ?: nextId++
+                taskId = nextId++
                 lifecycle++
                 stopReason = null
                 started = true
@@ -128,72 +110,15 @@ class PhoneTasks(
         return true
     }
 
-    /** A committed lifecycle change. Publishing its captured snapshot is deliberately separate:
-     * registry callers must release their admission lock before listeners/UI can run. */
-    internal class Change internal constructor(val snapshot: Snapshot)
-
-    internal fun stopForOwner(owner: Owner, reason: String): Change? = synchronized(lock) {
-        if (!currentLocked(owner)) return null
-        stopLocked(reason)
-    }
-
-    internal fun stopForSnapshot(expected: Snapshot, reason: String): Change? = synchronized(lock) {
-        // Snapshot.active may be false because of idle projection while internal active is true.
-        // The exact lifetime, rather than that projection, binds an explicit stop.
-        if (taskId != expected.id || lifecycle != expected.lifecycle) return null
-        stopLocked(reason)
-    }
-
-    private fun stopLocked(reason: String, now: Long = clock(), source: StopSource = StopSource.USER): Change {
-        // Record the fact before endLocked clears active. Repeated stops in
-        // this hold retain a prior interruption, but an expired hold cannot
-        // donate that fact to a later cold/idle stop.
-        interrupted = (now < stoppedUntil && interrupted) || (active && !idleLocked(now))
-        admissionEpoch++
-        if (active) endLocked() else lifecycle++
-        stoppedUntil = now + stopHoldMs
-        stopReason = reason
-        stopSource = source
-        paused = false
-        lock.notifyAll()
-        return Change(snapshotLocked(now))
-    }
-
-    internal fun resumeForSnapshot(expected: Snapshot): Change? = synchronized(lock) {
-        if (taskId != expected.id || lifecycle != expected.lifecycle) return null
-        if (clock() < stoppedUntil) {
-            lifecycle++
-            stoppedUntil = 0L
-            stopReason = null
-        }
-        interrupted = false
-        if (paused) {
+    fun stop(reason: String) {
+        synchronized(lock) {
+            if (active) endLocked() else lifecycle++
+            stoppedUntil = clock() + stopHoldMs
+            stopReason = reason
             paused = false
-            if (active) lastCallAt = clock()
+            lock.notifyAll()
         }
-        lock.notifyAll()
-        Change(snapshot())
-    }
-
-    internal fun publish(change: Change) = fire(change.snapshot)
-
-    /** Commit a stop without listeners; callers publish only after their admission lock is released. */
-    internal fun stopDeferred(reason: String, source: StopSource = StopSource.USER): Change = synchronized(lock) { stopLocked(reason, source = source) }
-
-    /** Ambient stops fence queued calls/prompts, but only a live task starts a stop hold. */
-    internal fun stopActiveDeferred(reason: String, source: StopSource = StopSource.ENVIRONMENT): Change = synchronized(lock) {
-        val now = clock()
-        if (active && !idleLocked(now)) return stopLocked(reason, now, source)
-        // A later ambient boundary revokes screen-only recovery without extending the hold.
-        if (now < stoppedUntil && source != StopSource.SCREEN_OFF) { stopSource = source }
-        admissionEpoch++
-        if (active) endLocked() else lifecycle++
-        lock.notifyAll()
-        Change(snapshotLocked(now))
-    }
-
-    fun stop(reason: String, source: StopSource = StopSource.USER) {
-        publish(stopDeferred(reason, source))
+        fire()
     }
 
     /** Ends the task without a stop hold (the engine went away). */
@@ -238,7 +163,6 @@ class PhoneTasks(
             if (active) endLocked() else lifecycle++
             stoppedUntil = 0L
             stopReason = null
-            interrupted = false
             owner = Owner(taskId, lifecycle, false)
             lock.notifyAll()
         }
@@ -273,15 +197,13 @@ class PhoneTasks(
     /** A single system start and its optional fallback notice, bound to the original call owner.
      * Task cancellation and each commitment share [lock]; platform work runs AFTER this lock.
      * Committed work may finish after stop returns. Thread interruption is only sampled here.
-     * [allowed] is a memory-only last admission check: no IO or other registry locks.
      */
-    inner class SystemDispatch internal constructor(private val owner: Owner, private val allowed: () -> Boolean) {
+    inner class SystemDispatch internal constructor(private val owner: Owner) {
         private var startCommitted = false
         private var noticeCommitted = false
 
         fun commitStart(): Boolean = synchronized(lock) {
             if (startCommitted || !owner.active || !currentLocked(owner) || Thread.currentThread().isInterrupted) return false
-            if (!allowed()) return false
             startCommitted = true
             true
         }
@@ -293,7 +215,7 @@ class PhoneTasks(
         }
     }
 
-    fun systemDispatch(owner: Owner, allowed: () -> Boolean = { true }): SystemDispatch = SystemDispatch(owner, allowed)
+    fun systemDispatch(owner: Owner): SystemDispatch = SystemDispatch(owner)
 
     private fun currentLocked(owner: Owner): Boolean =
         owner.taskId == taskId && owner.lifecycle == lifecycle && owner.active == active &&
@@ -301,70 +223,33 @@ class PhoneTasks(
 
     /** Engine/plugin shutdown also invalidates a prompt that predates any native task. */
     fun invalidateOwners() {
-        synchronized(lock) { lifecycle++; admissionEpoch++ }
-        fire()
-    }
-
-    /** Exact host run end wakes queued work and drops the stop hold: 停止只作用于本轮. */
-    fun cancelPending() {
-        synchronized(lock) {
-            lifecycle++
-            admissionEpoch++
-            paused = false
-            stoppedUntil = 0L
-            stopReason = null
-            interrupted = false
-            lock.notifyAll()
-        }
+        synchronized(lock) { lifecycle++; sendApproval = null }
         fire()
     }
 
     /** Applying a late waiver and checking its owner are one operation. */
-    fun confirmIfCurrent(owner: Owner, pkg: String? = null, waiveTask: Boolean = false, grant: String? = null): Boolean {
+    fun confirmIfCurrent(owner: Owner, pkg: String? = null, waiveTask: Boolean = false, send: SendScope? = null): Boolean {
         var changed = false
         synchronized(lock) {
             if (!owner.active || !currentLocked(owner)) return false
             if (pkg != null) approved += pkg
-            if (grant != null) grants += grant
+            if (send != null) sendApproval = lifecycle to send.fingerprint
             if (waiveTask && !waived) { waived = true; changed = true }
         }
         if (changed) fire()
         return true
     }
 
-    /** 本轮允许 already granted for this app and kind of action. */
-    fun hasGrant(pkg: String?, kind: String): Boolean = synchronized(lock) { grantKey(pkg, kind) in grants }
-
-    /** All consumers hold the original owner; scope changes revoke rather than restore history. */
-    fun syncVisualScope(owner: Owner, screen: PhoneScreen, scope: VisualScope?): Boolean = synchronized(lock) {
-        if (!owner.active || !currentLocked(owner)) return false
-        resetVisualLocked()
-        val value = scope?.takeIf { it.screen == screen }
-        if (visualScopes[screen] != value) visualGrants.remove(screen)
-        if (value == null) visualScopes.remove(screen) else visualScopes[screen] = value
-        true
-    }
-
-    fun hasVisualGrant(owner: Owner, scope: VisualScope): Boolean = synchronized(lock) {
-        owner.active && currentLocked(owner) && visualLifecycle == lifecycle &&
-            visualScopes[scope.screen] == scope && visualGrants[scope.screen] == scope
-    }
-
-    fun confirmVisualIfCurrent(owner: Owner, scope: VisualScope): Boolean = synchronized(lock) {
-        if (!owner.active || !currentLocked(owner) || visualLifecycle != lifecycle || visualScopes[scope.screen] != scope) return false
-        visualGrants[scope.screen] = scope
-        true
-    }
-
-    private fun resetVisualLocked() {
-        if (visualLifecycle != lifecycle) {
-            visualScopes.clear(); visualGrants.clear(); visualLifecycle = lifecycle
-        }
-    }
-
     fun stopIfCurrent(owner: Owner, reason: String): Boolean {
-        val change = stopForOwner(owner, reason) ?: return false
-        publish(change)
+        synchronized(lock) {
+            if (!currentLocked(owner)) return false
+            if (active) endLocked() else lifecycle++
+            stoppedUntil = clock() + stopHoldMs
+            stopReason = reason
+            paused = false
+            lock.notifyAll()
+        }
+        fire()
         return true
     }
 
@@ -385,9 +270,9 @@ class PhoneTasks(
     fun clearStop() {
         synchronized(lock) {
             lifecycle++
+            sendApproval = null
             stoppedUntil = 0L
             stopReason = null
-            interrupted = false
         }
         fire()
     }
@@ -401,22 +286,6 @@ class PhoneTasks(
             lock.notifyAll()
         }
         fire()
-    }
-
-    /** Display controls retain their captured scope; listeners still run outside the lock. */
-    fun setPausedIfCurrent(owner: Owner, value: Boolean): Boolean {
-        var changed = false
-        synchronized(lock) {
-            if (!owner.active || !currentLocked(owner)) return false
-            if (paused != value) {
-                paused = value
-                if (!value) lastCallAt = clock()
-                lock.notifyAll()
-                changed = true
-            }
-        }
-        if (changed) fire()
-        return true
     }
 
     val isPaused: Boolean get() = synchronized(lock) { paused }
@@ -447,6 +316,10 @@ class PhoneTasks(
     fun isStopped(): Boolean = synchronized(lock) { clock() < stoppedUntil }
 
     fun isApproved(pkg: String): Boolean = synchronized(lock) { pkg in approved }
+
+    fun isSendApproved(send: SendScope): Boolean = synchronized(lock) {
+        active && !idleLocked(clock()) && clock() >= stoppedUntil && sendApproval == (lifecycle to send.fingerprint)
+    }
 
     fun approve(pkg: String) = synchronized(lock) {
         approved += pkg
@@ -494,31 +367,17 @@ class PhoneTasks(
         }
     }
 
-    fun interjectIfCurrent(owner: Owner, text: String): Boolean {
-        val value = text.trim()
-        if (value.isEmpty()) return false
-        synchronized(lock) {
-            if (!owner.active || !currentLocked(owner)) return false
-            interjections += value
-            while (interjections.size > 5) interjections.removeAt(0)
-        }
-        return true
-    }
-
     fun drainInterjections(): List<String> = synchronized(lock) {
         val out = interjections.toList()
         interjections.clear()
         out
     }
 
-    fun snapshot(): Snapshot = synchronized(lock) { snapshotLocked(clock()) }
-
-    private fun snapshotLocked(now: Long): Snapshot {
+    fun snapshot(): Snapshot = synchronized(lock) {
+        val now = clock()
         val idle = idleLocked(now)
-        val stopped = now < stoppedUntil
-        if (!stopped) interrupted = false
-        return Snapshot(taskId, active && !idle, if (active && !idle) app else null, paused, stopped, stopReason,
-            active && !idle && waived, lifecycle, interrupted, if (stopped) stopSource else null)
+        Snapshot(taskId, active && !idle, if (active && !idle) app else null, paused, now < stoppedUntil, stopReason,
+            active && !idle && waived, lifecycle)
     }
 
     /** Idle: no call running, not paused, and nothing for [idleMs]. */
@@ -528,8 +387,7 @@ class PhoneTasks(
         lifecycle++
         active = false
         approved.clear()
-        grants.clear()
-        visualScopes.clear(); visualGrants.clear(); visualLifecycle = lifecycle
+        sendApproval = null
         waived = false
         notified.clear()
         interjections.clear()
@@ -537,7 +395,8 @@ class PhoneTasks(
         paused = false
     }
 
-    private fun fire(s: Snapshot = snapshot()) {
+    private fun fire() {
+        val s = snapshot()
         for (l in listeners) {
             try {
                 l(s)
@@ -547,28 +406,8 @@ class PhoneTasks(
     }
 
     companion object {
-        /** 本轮不再执行: the person stopped this turn. The next turn starts fresh and asks again. */
         // l10n:keep agent stop protocol
-        const val STOPPED_MESSAGE = "你停止了本轮手机操作，本轮不再执行手机动作；下一轮会恢复，届时会重新向你确认"
-
-        /** This one action was cancelled; the rest of the turn is unaffected. */
-        // l10n:keep agent cancel protocol
-        const val CANCELLED_MESSAGE = "这一条手机动作已取消，没有执行；本轮其他手机操作不受影响"
-
-        /** 熄屏 / 无障碍断开 stopped this turn (not the person). */
-        // l10n:keep agent environment-stop protocol
-        const val ENV_STOPPED_MESSAGE = "手机操控被系统中断（熄屏或无障碍断开），本轮不再执行手机动作；恢复后下一轮会重新向你确认"
-
-        /** The host ended this turn; the next turn asks again. */
-        // l10n:keep agent run-end protocol
-        const val RUN_ENDED_MESSAGE = "本轮已结束，这条手机动作没有执行；下一轮会恢复，届时会重新向你确认"
-
-        /** No confirmation surface is reachable, so this one action did not run. */
-        // l10n:keep agent no-gate protocol
-        const val NO_CONFIRM_MESSAGE = "这一条需要你确认，但现在无法弹出确认界面，没有执行；本轮其他手机操作不受影响。请允许 DSH 发通知，或开启无障碍"
-
-        /** 本轮授权 key: the app plus the kind of action the person allowed for this turn. */
-        fun grantKey(pkg: String?, kind: String): String = (pkg ?: "") + "\u0000" + kind
+        const val STOPPED_MESSAGE = "用户已停止本次手机操作。不要再调用手机工具，直接告诉用户已经停下"
     }
 }
 
