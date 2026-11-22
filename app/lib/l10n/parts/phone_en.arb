@@ -1,4 +1,6 @@
 {
+  "phoneVisualGrantsTitle": "Screenshot control permissions",
+  "phoneVisualGrantRevoke": "Tap to revoke screenshot-based tapping and input",
   "phoneDiagnosticsCollecting": "Collecting…",
   "phoneDiagnosticsPacking": "Packing…",
   "phoneDiagnosticsSharing": "Opening share sheet…",
@@ -69,6 +71,9 @@
   "phoneToolScroll": "Swipe",
   "phoneToolKey": "Press key",
   "phoneToolTapCoordinates": "Tap coordinates",
+  "phoneToolGesture": "Gesture",
+  "phoneToolInput": "Type at point",
+  "phoneToolRun": "Run routine",
   "phoneToolHandoff": "Hand back to you",
   "phoneToolOpenApp": "Open app",
   "phoneToolListApps": "View apps",
