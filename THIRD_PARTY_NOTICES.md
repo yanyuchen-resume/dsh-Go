@@ -68,7 +68,7 @@ used under the MIT License with the author's permission.
 - `chat/`：`chat_header.dart`、`chat_list.dart`、`chat_screen.dart`、`composer.dart`、`model_sheet.dart`
 - `chat/render/`：`ansi_text.dart`、`code_block.dart`、`diff_view.dart`、`markdown_body.dart`
 - `chat/widgets/`：`approval_card.dart`、`assistant_message.dart`、`question_card.dart`、`thinking_pill.dart`、`tool_row.dart`、`user_bubble.dart`
-- `common/`：`app_sheet.dart`、`overscroll_forwarder.dart`、`sheet_navigator.dart`、`status_dot.dart`、`streaming_cursor.dart`、`tool_glyph.dart`
+- `common/`：`app_sheet.dart`、`glass_pill.dart`、`overscroll_forwarder.dart`、`sheet_navigator.dart`、`status_dot.dart`、`streaming_cursor.dart`、`tool_glyph.dart`
 - `settings/`：`diagnostics_page.dart`、`settings_widgets.dart`
 - `shell/`：`drawer_drag.dart`、`home_shell.dart`、`sessions_drawer.dart`
 - `theme/`：`accent.dart`、`app_theme.dart`、`backdrop.dart`、`highlight_theme.dart`、`motion.dart`、`palette.dart`、`semantic_colors.dart`、`shapes.dart`、`squircle.dart`、`typography.dart`
@@ -342,7 +342,7 @@ Libraries.dev metal-fx, translated to Flutter GLSL.
 
 ### tawcroot（tawc，MIT）
 
-「tawcroot 加速启动」（设置 → 开发者选项，默认关闭）用的 `libtawcroot.so`，由 `runtime/tawcroot/build.py` 从 [tawc](https://github.com/wmww/tawc) 固定提交 `a49a4075228f4801dadc1eee584aed33fe8ea4ce`（源码归档 SHA-256 `74487243bde86c303e786e79cd4a13e98c3279cae4ab7725dcf5fa51c0b530c1`）的 `tawcroot/src`、`tawcroot/include` 编译；编译前打上本地覆片 `runtime/tawcroot/bind-aware-oracle.diff`（`prod_readlink` 遇到已生效的绑定边界即停，修手机存储快捷链接子路径误报 EACCES），其余是上游原样。tawc 的 README 写明 `deps/` 以外的代码都是 MIT（[LICENSE.MIT](https://github.com/wmww/tawc/blob/a49a4075228f4801dadc1eee584aed33fe8ea4ce/LICENSE.MIT)）；整个项目因 `deps/` 里的 GPLv3 代码按 GPLv3 发布，那部分我们不编译、不分发。
+「tawcroot 加速启动」（设置 → 开发者选项，默认关闭）用的 `libtawcroot.so`，由 `runtime/tawcroot/build.py` 从 [tawc](https://github.com/wmww/tawc) 固定提交 `a49a4075228f4801dadc1eee584aed33fe8ea4ce`（源码归档 SHA-256 `74487243bde86c303e786e79cd4a13e98c3279cae4ab7725dcf5fa51c0b530c1`）的 `tawcroot/src`、`tawcroot/include` 原样编译，没有修改上游源码。tawc 的 README 写明 `deps/` 以外的代码都是 MIT（[LICENSE.MIT](https://github.com/wmww/tawc/blob/a49a4075228f4801dadc1eee584aed33fe8ea4ce/LICENSE.MIT)）；整个项目因 `deps/` 里的 GPLv3 代码按 GPLv3 发布，那部分我们不编译、不分发。
 
 - 版权：Copyright (c) 2026 Sophie Winter
 - 许可：MIT（全文见文末「MIT License」），App 内「开源许可」页的 `tawcroot (tawc)` 条目附全文
@@ -424,6 +424,8 @@ APK 内置的 Linux 运行时由 `runtime/build-runtime.sh` 构建，以下组�
 | DeepSeek Harness 主包（`@deepseek-ai/dsh`） | 0.2.1-rc.4 | npm | MIT；构建补丁集合由 `runtime/patches/pins.json` 决定 |
 
 GPL / LGPL 组件的对应源码：proot、libtalloc、libandroid-shmem 的二进制取自 Termux 官方 apt 仓库（https://packages.termux.dev/apt/termux-main ），`runtime/build-runtime.sh` 固定了每个 .deb 的 SHA-256。源码分别在 https://github.com/termux/proot （tag `v5.1.107.102`，构建时一并下载并核对哈希）、https://www.samba.org/ftp/talloc/ （2.5.0）、https://github.com/termux/libandroid-shmem （0.7）；Termux 的构建配方在 https://github.com/termux/termux-packages 。本项目对这三个二进制的修改只有上面说的 DT_NEEDED / DT_SONAME 改名。
+
+Termux 移除旧版 PRoot 包后，两个架构的原始 5.1.107.98 `.deb` 从官方历史构建恢复并按原 SHA-256 核验，固定保存在 [`runtime/inputs/termux/`](runtime/inputs/termux/README.md)，随附原始 GPL-2.0 全文、构建提交及对应源码链接。After the live repository removed PRoot 5.1.107.98, its two original packages were recovered from an official Termux build and verified against the existing checksums. The fixed inputs include the original GPL-2.0 text, build provenance and corresponding source link; no dependency version was changed.
 
 ### npm 传递依赖与发行核验
 
