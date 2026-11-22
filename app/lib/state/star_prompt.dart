@@ -1,8 +1,7 @@
 // The star prompt (docs/design/star-prompt.md): after half an hour with the
 // app in front, the whale girl asks for a star on GitHub, in a dialog, when
-// the person is idle in the chat; 「下次再说」 asks again at 2, 5, 10 and 20
-// hours of use, each time in other words (the last says it is the last), and
-// that is all.
+// the person is idle in the chat; 「下次再说」 asks once more five hours of use
+// later, and that is all.
 //
 // Off unless the build says `--dart-define=DSH_STAR_PROMPT=true`: off, nothing
 // here runs (no counting, no preferences). What is kept on the phone, in one
@@ -19,7 +18,6 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../phone/phone_channel.dart' show PhoneTaskStatus;
 import '../pets/pet_signals.dart' show petFocusProvider, petPendingProvider;
-import '../update/update_config.dart' show updateRepo;
 import 'draft_store.dart';
 import 'notify_state.dart' show appForegroundProvider, chatOnScreenProvider;
 import 'phone_state.dart' show phoneChannelProvider;
@@ -32,28 +30,20 @@ const starPromptEnabled = bool.fromEnvironment('DSH_STAR_PROMPT');
 /// The switch as the app reads it (tests turn it on).
 final starPromptGateProvider = Provider<bool>((ref) => starPromptEnabled);
 
-/// Where 「去 GitHub 点 Star」 goes: the public repository's page (its releases
-/// are the app's updates).
-final starProjectPage = Uri.https('github.com', '/$updateRepo');
+/// Where 「去 GitHub 点 Star」 goes: credit the original project independently
+/// of the community fork's update source.
+final starProjectPage = Uri.https('github.com', '/ccch1mneyyy/dsh-go');
 
 /// The numbers behind the prompt, with their reasons in the design note.
 abstract final class StarPromptRules {
-  /// The time in front at which each ask comes (after 「下次再说」 or back for
-  /// the ones before it); each has its own words, the last says it is the last.
-  static const asks = [
-    Duration(minutes: 30),
-    Duration(hours: 2),
-    Duration(hours: 5),
-    Duration(hours: 10),
-    Duration(hours: 20),
-  ];
+  /// Time in front before the first ask.
+  static const firstAsk = Duration(minutes: 30);
 
-  /// At least this much more time in front after an ask before the next: one
-  /// that came up late doesn't bring the next right after it.
-  static const gap = Duration(hours: 1);
+  /// After 「下次再说」 (or back): this much more time in front before the second.
+  static const again = Duration(hours: 5);
 
   /// Asked this often at most, ever.
-  static int get maxShows => asks.length;
+  static const maxShows = 2;
 
   /// How often time in front is written down (and the prompt looks again).
   static const tick = Duration(minutes: 1);
@@ -85,12 +75,8 @@ class StarPromptRecord {
   /// The time in front at which it asks next; null: never again.
   Duration? get nextAt {
     if (finished || shows >= StarPromptRules.maxShows) return null;
-    final at = StarPromptRules.asks[shows];
-    final soonest = switch (askedAt) {
-      final asked? => asked + StarPromptRules.gap,
-      null => Duration.zero,
-    };
-    return at > soonest ? at : soonest;
+    if (shows == 0) return StarPromptRules.firstAsk;
+    return (askedAt ?? Duration.zero) + StarPromptRules.again;
   }
 
   bool get due => switch (nextAt) {
