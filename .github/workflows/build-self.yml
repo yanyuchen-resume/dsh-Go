@@ -1,0 +1,110 @@
+# 自建 DSH Go：官方 1.3.0 + 社区版手机自动化增强
+# 放在你自己 fork 的仓库里，路径必须是 .github/workflows/build-self.yml
+# 手机浏览器打开 Actions → Build DSH Go (self) → Run workflow 即可出 APK。
+
+name: Build DSH Go (self)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_name:
+        description: 版本名（要高于官方 1.3.0，且之后只增不减）
+        required: true
+        default: "1.3.1"
+      merge_patch:
+        description: 相对官方 1.3.0 的合并补丁路径（留空表示不加）
+        required: false
+        default: "selfbuild/merge-community.patch"
+
+env:
+  FLUTTER_VERSION: 3.47.7
+  JAVA_VERSION: "17"
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 应用合并补丁
+        if: ${{ inputs.merge_patch != '' }}
+        run: |
+          if [ -f "${{ inputs.merge_patch }}" ]; then
+            git apply --3way --whitespace=nowarn "${{ inputs.merge_patch }}" \
+              || { echo "补丁有冲突，先在这里解决再编译"; git diff --name-only --diff-filter=U; exit 1; }
+            echo "补丁已应用"
+          else
+            echo "没找到 ${{ inputs.merge_patch }}，按原样编译"
+          fi
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: 还原签名证书
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -e
+          [ -n "$KEYSTORE_BASE64" ] || { echo "缺 secret ANDROID_KEYSTORE_BASE64"; exit 1; }
+          echo "$KEYSTORE_BASE64" | base64 -d > app/android/app/self-release.jks
+          printf 'storeFile=self-release.jks\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' \
+            "$STORE_PASSWORD" "$KEY_ALIAS" "$KEY_PASSWORD" > app/android/key.properties
+          chmod 600 app/android/key.properties
+
+      - name: 准备 local.properties
+        run: |
+          cd app/android
+          printf 'sdk.dir=%s\nflutter.sdk=%s\n' "$ANDROID_HOME" "$FLUTTER_ROOT" > local.properties
+
+      - name: pub get
+        working-directory: app
+        run: flutter pub get
+
+      - name: 合并本地化分片（社区版新增的 automation/phone 文案）
+        working-directory: app
+        run: python3 tool/l10n_merge.py
+
+      - name: 编译 arm64 release APK
+        working-directory: app
+        env:
+          NAME: ${{ inputs.version_name }}
+        run: |
+          set -e
+          CODE=$(python3 ../tooling/build_number.py)
+          echo "versionName=$NAME versionCode=$CODE"
+          flutter build apk --release \
+            --flavor arm64 \
+            --target-platform android-arm64 \
+            --build-name "$NAME" \
+            --build-number "$CODE" \
+            --dart-define=DSH_APP_VERSION="$NAME+$CODE"
+          find build/app/outputs -name "*.apk" -maxdepth 4
+
+      - name: 校验签名与版本
+        working-directory: app
+        run: |
+          set -e
+          APK=$(find build/app/outputs -name "*-arm64-release.apk" | head -1)
+          echo "APK=$APK"
+          ls -lh "$APK"
+          sha256sum "$APK"
+          "$ANDROID_HOME"/build-tools/*/apksigner verify --print-certs "$APK" || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dsh-go-self-arm64
+          path: app/build/app/outputs/flutter-apk/*.apk
+          if-no-files-found: error
