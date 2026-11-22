@@ -1,7 +1,5 @@
 package io.github.ccch1mneyyy.dsh_app.phone.a11y
 
-import io.github.ccch1mneyyy.dsh_app.phone.SensitiveWords
-
 // A plain copy of the accessibility tree: what ScreenFormat needs and nothing
 // Android-typed, so the formatting rules run in a JVM test. TreeCapture
 // fills it from AccessibilityNodeInfo; tests build it by hand.
@@ -40,7 +38,7 @@ object Scroll {
 }
 
 /** One accessibility node. [ref] indexes the capture's native node list (-1 in tests). */
-class UiNode(
+data class UiNode(
     val ref: Int = -1,
     val className: String = "",
     val text: String? = null,
@@ -71,9 +69,6 @@ class UiNode(
     val rangeCurrent: Float? = null,
     val rangeMax: Float? = null,
     val children: List<UiNode> = emptyList(),
-    /** Raw native facts for ordinary visual targets; missing facts never imply a leaf/click action. */
-    val rawChildCount: Int = -1,
-    val actionClick: Boolean = false,
 )
 
 enum class WindowKind { APP, SYSTEM }
@@ -88,18 +83,36 @@ class UiWindow(
     val root: UiNode?,
 )
 
-/** Secret fields in the whole captured tree, including nodes omitted from the text listing. */
-internal fun secretFieldBounds(windows: List<UiWindow>): List<Box> {
-    val bounds = ArrayList<Box>()
-    fun visit(node: UiNode) {
-        val hint = node.hint?.takeIf { it.isNotBlank() } ?: node.text?.takeIf { node.showingHint }
-        if (node.password || (node.editable && SensitiveWords.secretHit(hint, node.desc, node.viewId) != null)) {
-            bounds += node.bounds
-        }
-        node.children.forEach(::visit)
+/** Clips descendants before their words can be merged into a visible clickable parent. */
+internal object VisibleTree {
+    fun windows(windows: List<UiWindow>, viewport: Box? = null): List<UiWindow> = windows.mapIndexed { index, window ->
+        val clip = viewport?.let(window.bounds::intersect) ?: window.bounds
+        val covering = windows.take(index).map { it.bounds }
+        val root = window.root?.let { visibleNode(it, clip, covering) }
+        if (root === window.root) window
+        // Keep physical window geometry for screenshot-to-display coordinate mapping.
+        else UiWindow(window.id, window.kind, window.packageName, window.title, window.bounds, root)
     }
-    windows.forEach { it.root?.let(::visit) }
-    return bounds
+
+    private fun visibleNode(node: UiNode, clip: Box, covering: List<Box>): UiNode? {
+        if (clip.isEmpty) return null
+        val visible = node.bounds.intersect(clip)
+        // Ordinary zero-size layout wrappers do not establish a clipping viewport.
+        val childClip = if (node.scrollable) visible else clip
+        val children = node.children.mapNotNull { visibleNode(it, childClip, covering) }
+        // A modal window can block node actions even when part of the underlying row shows.
+        // Keep uncovered descendants, but do not claim the overlapped node itself is a target.
+        val covered = covering.any { visible.intersect(it).area > 0 }
+        if (visible.isEmpty || covered) {
+            if (children.isEmpty()) return null
+            return node.copy(bounds = visible, text = null, desc = null, hint = null, viewId = null,
+                clickable = false, longClickable = false, editable = false, checkable = false,
+                children = children)
+        }
+        if (visible == node.bounds && children.size == node.children.size &&
+            children.indices.all { children[it] === node.children[it] }) return node
+        return node.copy(bounds = visible, children = children)
+    }
 }
 
 /**
