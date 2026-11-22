@@ -2,11 +2,19 @@
 
 App 以 APK 分发、不上商店，更新靠 App 自己查 GitHub Releases、下载、校验、调系统安装器。本文是发版约定和步骤，以及更新链路的取舍。代码在 `app/lib/update/`（检查、下载、校验）、`app/lib/state/update_state.dart`（状态与节流）、`app/lib/ui/update/`（设置行、弹窗）、`app/android/.../update/`（PackageInstaller 安装）。
 
-> **正式发版前必须先换成固定的发布密钥**（见「签名」）。存在 `app/android/key.properties` 时 release 使用其中的发布密钥；缺少配置时仅为本地构建回落到 debug key，不可用于正式发布。
+> **发版必须使用固定签名，不能让 CI 临时生成另一把密钥**（见「签名」）。存在 `app/android/key.properties` 时 release 使用其中的密钥；缺少配置时回落到打包机器的 debug key。当前社区 fork 沿用历史固定证书，原因与风险见下节。
+
+## GitHub 自动发版
+
+`.github/workflows/release.yml` 在 `main` 的 CI 成功后检查版本：已有标签则跳过，新版本必须有双语更新日志；随后构建固定版本的 arm64 运行时与 APK，核对签名并运行 Android 单测，生成 `SHA256SUMS` / `update.json`，再创建 `puppy-bai/dsh-Go` 的 GitHub Release。带 `-` 的版本标为预发布，不设为 latest。也可在 Actions 页面手动运行，但该提交的 CI 必须已通过。仅发布当前 main，历史版本标签和 APK 不覆盖。历史回填时在提交说明中加入 `[skip-release]`，跳过自动发布。
+
+本 fork 仅向 GitHub 发布，不使用上游的 Cloudflare 下载桶或内测通道。新工作流编译时传入 `DSH_UPDATE_MIRROR=`，避免上游清单抢先回答；历史 1.0.16～1.0.18 APK 保留原文件，其内置更新配置仍指向上游，需要从本仓库 Release 手动下载覆盖更新。下面的多线路发布章节保留为上游运维参考；不要在本 fork 执行其 `publish-release.sh`。
+
+工作流使用仓库 Actions Secret `ANDROID_KEYSTORE_BASE64` 还原签名 keystore。当前版本为了让已经安装的社区包能覆盖升级，继续使用原 APK 的 Android Debug 证书，并强制核对证书 SHA-256 `48175d4029e9d47c4b008f15f706cb4deca1b88f80095b14d2b21a3d4ed02d35`；这把密钥只存为加密 Secret，不得提交进仓库。它不是适合长期公开发行的证书；更换密钥前必须制定兼容迁移与备份方案（参见「签名」中的密钥轮换）。
 
 ## 资产约定
 
-每个版本一个 GitHub Release，仓库 `ccch1mneyyy/dsh-go`，必须公开（私有仓库匿名访问一律 404，App 只会显示「暂时检查不了」）。同一组文件也放在公开下载桶：`https://dl.dshtui.com/download/<版本>/<文件>`，最新版的清单在 `https://dl.dshtui.com/update.json`（见「公开下载桶 dl」）。
+每个版本一个 GitHub Release，仓库 `puppy-bai/dsh-Go`，必须公开（私有仓库匿名访问一律 404，App 只会显示「暂时检查不了」）。同一组文件也放在公开下载桶：`https://dl.dshtui.com/download/<版本>/<文件>`，最新版的清单在 `https://dl.dshtui.com/update.json`（见「公开下载桶 dl」）。
 
 正式版统一提供 arm64 安装包。`update.json` 供更新清单回退读取，`SHA256SUMS` 供缺少 GitHub digest 时校验 APK，`*.dshdelta` 是从最近几个旧版升上来的增量补丁（`docs/design/delta-update.md`），都由 App 自己用，不要求用户手动下载。GitHub 自动生成的 Source code 压缩包是源码快照，不是安装包。
 
@@ -32,7 +40,7 @@ App 以 APK 分发、不上商店，更新靠 App 自己查 GitHub Releases、�
   "title": "DSH 1.2.0",
   "publishedAt": "2026-11-01T08:00:00Z",
   "notes": "## 新功能\n…",
-  "page": "https://github.com/ccch1mneyyy/dsh-go/releases/tag/v1.2.0",
+  "page": "https://github.com/puppy-bai/dsh-Go/releases/tag/v1.2.0",
   "assets": {
     "arm64": { "name": "dsh-go-1.2.0-arm64.apk", "size": 180107933, "sha256": "…" }
   },
@@ -86,7 +94,13 @@ versionCode = (年 - 2026) × 10^8 + MMDDhhmm      时钟固定按 UTC+8
 
    脚本顺带传 `DSH_APP_VERSION=<版本名>+<构建号>`（`app/lib/state/app_info.dart`），作为诊断信息和更新状态的编译期默认版本。设置和关于页读取更新状态中的版本；原生版本读取成功且版本名可解析时，更新状态改用系统提供的 `versionName` / `versionCode`，读取失败或版本名无法解析时保留默认值。
 
-   脚本给正式包自动打开求 star 提示（开头一行带 `· star prompt`）：`DSH_STAR_PROMPT=true` 写在 `tooling/star-prompt-on.json` 里，排在 `--` 后面的额外参数前面传给 flutter，所以额外参数里再写 `DSH_STAR_PROMPT`（行内或文件）以额外参数为准。`--beta`、`--side`、`--debug`/`--profile` 的包不加，`--no-star` 可以手动关掉。以前要手动加这个参数，最近的正式包漏了（1.3.0 确认没加，1.1.0、1.2.0 的打包记录里也没有），装这些版本的人一次都没被问过。提示的触发条件见 `docs/design/star-prompt.md`；使用时长从装上这个包算起。
+   **公测起**（GitHub Release 和公开渠道的包）打开求 star 提示，内测包不加：
+
+   ```sh
+   tooling/build-apk.sh -- --dart-define=DSH_STAR_PROMPT=true
+   ```
+
+   提示的触发条件见 `docs/design/star-prompt.md`；使用时长从装上这个包算起。
 3. **确认签名**：对要发布的 arm64 APK 执行 `apksigner verify -v --min-sdk-version 21 --print-certs`。v1、v2、v3 三种签名都要是 `true`（v1 给仍读 JAR 签名的安装器和安全扫描；不加 `--min-sdk-version` 时 apksigner 按 minSdk 26 不查 v1），证书主题不得含 `CN=Android Debug`，证书 SHA-256 必须与上一版一致。验证失败时不要生成或上传 `dist/`、`update.json`。
 4. **生成资产**（改名、算校验和、写 `update.json`）。默认只收录 arm64；版本名取 pubspec，构建号用 `aapt2` 从 APK 里读。版本名不匹配或构建号还是占位的 `1` 时脚本直接报错：
 
@@ -170,7 +184,7 @@ npx wrangler r2 object put dshgo-share/beta/update.json --file prev.json --conte
 |---|---|---|---|
 | 国内线路 | `<CN_BASE_URL><版本>/<文件>` | 香港对象存储（阿里云 OSS 或腾讯云 COS），公共读 | `request.cf.country` 为 `CN` |
 | 海外线路 | 公开模式 `https://dl.dshtui.com/download/<版本>/<文件>`（清单 `routes` 里没有 `dl` 的旧版本是 `/download/<版本>/<文件>`）；密钥模式是 10 分钟的签名链接 | 公开模式：公开 R2 桶 `dshgo-dl`，字节不经 Worker；旧版本和密钥模式：R2 `beta/<版本>/`，经 Worker | 其他地区 |
-| GitHub | `github.com/ccch1mneyyy/dsh-go/releases/download/v<版本>/<文件>` | GitHub Release | 手动切换 |
+| GitHub | `github.com/puppy-bai/dsh-Go/releases/download/v<版本>/<文件>` | GitHub Release | 手动切换 |
 
 - 页面上用分段按钮切换（纯 CSS，不跑脚本）；`?via=cn|global|github` 直接指定线路，`?lang=zh|en` 指定语言（默认跟浏览器）。
 - 一条线路只在**配置了**并且**这一版确实传上去了**时出现：`beta/update.json` 的 `routes` 由发布脚本在下载核对之后写入。`CN_BASE_URL` 为空时国内线路整项隐藏；没有 `routes` 的旧清单只给海外线路。
@@ -303,7 +317,7 @@ scripts/publish-release.sh ../../dist --github
 |---|---|
 | 页面和带令牌的 App | 上一版的清单设为最新（「内测通道」的回滚两行）。上一版若是旧脚本发的、清单里没有 `routes`，回滚后页面只给海外线路 |
 | 公开桶的 `update.json` | `npx wrangler r2 object get dshgo-dl/download/<上一版>/update.json --file prev.json --remote`，再 `npx wrangler r2 object put dshgo-dl/update.json --file prev.json --content-type 'application/json; charset=utf-8' --cache-control 'public, max-age=300' --remote`（环境变量同上）；边缘最多再给 5 分钟旧的。上一版没传过公开桶（回滚的是第一个走 dl 的版本）时没有可回的清单，删掉 `dshgo-dl/update.json` 即可 |
-| GitHub 上的这一版 | `gh release edit v<版本> --repo ccch1mneyyy/dsh-go --draft=true` 撤回成草稿，`releases/latest` 回到上一版；彻底删除用 `gh release delete v<版本> --repo ccch1mneyyy/dsh-go --cleanup-tag` |
+| GitHub 上的这一版 | `gh release edit v<版本> --repo puppy-bai/dsh-Go --draft=true` 撤回成草稿，`releases/latest` 回到上一版；彻底删除用 `gh release delete v<版本> --repo puppy-bai/dsh-Go --cleanup-tag` |
 | 香港桶 | 不用动：页面跟着清单走，不再指向新版；要删就删 `<版本>/` |
 | 公开下载 | `DOWNLOAD_ACCESS` 改回 `"key"` 再部署 |
 
@@ -343,7 +357,7 @@ AE 只留约 3 个月，想长期保留就定期把输出存下来。
 
 ## 签名
 
-Android 只接受和已装版本**同一签名**的覆盖安装。`build.gradle.kts` 从 `app/android/key.properties` 读取发布签名；配置缺失时回落到打包机器的 `~/.android/debug.keystore`，仅供本地构建。正式发版必须先配置发布密钥。
+Android 只接受和已装版本**同一签名**的覆盖安装。`build.gradle.kts` 从 `app/android/key.properties` 读取发布签名；配置缺失时回落到打包机器的 `~/.android/debug.keystore`，仅供本地构建。正式发版通常必须先配置发布密钥；本社区 fork 暂时沿用原 APK 的 Debug 证书以避免用户卸载丢数据，相关风险与 Actions Secret 配置见「GitHub 自动发版」。
 
 做法：生成一把发布密钥，只在发版机器上用，并离线备份（丢了等于以后再也发不了更新，所有用户都得卸载重装）。
 
