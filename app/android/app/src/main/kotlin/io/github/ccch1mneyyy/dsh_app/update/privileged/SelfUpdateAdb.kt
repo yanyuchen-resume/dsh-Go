@@ -40,10 +40,10 @@ internal class SelfUpdateAdb private constructor(private val context: Context) :
                 try {
                     if (closed.get()) throw SelfUpdateException("transportLost")
                     val bytes = ByteArrayOutputStream()
-                    val input = stream.openInputStream().buffered()
+                    val input = stream.openInputStream()
                     while (true) {
                         val b = input.read()
-                        if (b < 0 || b == '\n'.code) break
+                        if (b < 0) break
                         if (bytes.size() >= 64 || b > 127) throw SelfUpdateException("identityChanged")
                         bytes.write(b)
                     }
@@ -70,8 +70,7 @@ internal class SelfUpdateAdb private constructor(private val context: Context) :
                 try {
                     if (closed.get()) throw SelfUpdateException("transportLost")
                     SelfUpdateStreams.exchange(prepared.snapshot.input(), prepared.snapshot.size, prepared.sha256,
-                        stream.openInputStream(), stream.openOutputStream(), endAtAdbResultLine = true,
-                        close = { stream.close() })
+                        stream.openInputStream(), stream.openOutputStream(), close = { stream.close() })
                 } finally { runCatching { stream.close() }; activeStream = null }
             }
         } catch (error: Exception) {
